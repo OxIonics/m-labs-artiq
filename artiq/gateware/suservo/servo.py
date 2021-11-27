@@ -5,7 +5,7 @@ from .iir import IIR, IIRWidths
 from .dds_ser import DDS, DDSParams
 
 
-def predict_timing(adc_p, iir_p, dds_p):
+def predict_timing(adc_p, iir_p, dds_p):    
     """
     The following is a sketch of the timing for 1 Sampler (8 ADCs) and N Urukuls
     Shown here, the cycle duration is limited by the IIR loading+processing time.
@@ -42,7 +42,7 @@ class Servo(Module):
         assert t_iir + 2*adc_p.channels < t_cycle, "need shifting time"
 
         self.submodules.adc = ADC(adc_pads, adc_p)
-        self.submodules.iir = IIR(iir_p)
+        self.submodules.iir = IIR(iir_p, adc_p, dds_p, t_cycle)
         self.submodules.dds = DDS(dds_pads, dds_p)
 
         # adc channels are reversed on Sampler
@@ -63,7 +63,6 @@ class Servo(Module):
         assert t_restart > 1
         cnt = Signal(max=t_restart)
         cnt_done = Signal()
-        active = Signal(3)
 
         # Indicates whether different steps (0: ADC, 1: IIR, 2: DDS) are
         # currently active (exposed for simulation only), with each bit being
@@ -71,6 +70,7 @@ class Servo(Module):
         # timing details of the different steps, any number can be concurrently
         # active (e.g. ADC read from iteration n, IIR computation from iteration
         # n - 1, and DDS write from iteration n - 2).
+        self._active = active = Signal(3)
 
         # Asserted once per cycle when the DDS write has been completed.
         self.done = Signal()
@@ -95,11 +95,22 @@ class Servo(Module):
                     cnt.eq(t_restart - 1)
                 )
         ]
+
+        # Count number of cycles since the servo was last started from idle.
+        self.sync += If(active == 0,
+            self.iir.t_running.eq(0),
+            self.iir.reset_dds_phase.eq(1)
+        ).Else(
+            self.iir.t_running.eq(self.iir.t_running + 1)
+        )
+
+        self.sync += dds_pads.passthrough.eq(active == 0)
+
         self.comb += [
                 cnt_done.eq(cnt == 0),
                 self.adc.start.eq(self.start & cnt_done),
                 self.iir.start.eq(active[0] & self.adc.done),
                 self.dds.start.eq(active[1] &
                     (self.iir.shifting | self.iir.done)),
-                self.done.eq(self.dds.done),
+                self.done.eq(self.dds.done)
         ]
