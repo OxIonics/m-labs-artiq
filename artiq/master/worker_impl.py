@@ -32,6 +32,8 @@ from artiq.compiler import import_cache
 from artiq.coredevice.core import CompileError, host_only, _render_diagnostic
 from artiq import __version__ as artiq_version
 
+import logging
+logger = logging.getLogger(__name__)
 
 ipc = None
 
@@ -97,11 +99,82 @@ class Scheduler:
         self.expid = expid
         self.priority = priority
 
-    pause_noexc = staticmethod(make_parent_action("pause"))
+    idle_parent = staticmethod(make_parent_action("idle"))
+    pause_parent = staticmethod(make_parent_action("pause"))
+
     @host_only
     def pause(self):
-        if self.pause_noexc():
+        cmd = self.pause_parent()
+        if cmd == "request_termination":
             raise TerminationRequested
+        elif cmd == "resume":
+            return
+        else:
+            raise ValueError(
+                "Unexpected master command after pause: '{}'".format(cmd))
+
+    @host_only
+    def idle(self, callback):
+        """Suspend execution until some condition is fulfilled.
+
+        This allows an experiment to voluntarily cede to other experiments,
+        even if the latter have in general got a lower priority. An experiment
+        calling this method needs to ensure that any connection to the core
+        device has been closed beforehand.
+        The difference to the :meth:`~artiq.master.worker_impl.pause` method
+        can be summarised as follows:
+            - Paused experiments will run unless there is another experiment
+                with higher priority
+            - Idle experiments will not run unless some condition is satisfied
+
+        The scheduler regularly checks whether an experiment should remain
+        idle by calling the ``callback`` argument passed to this method.
+        This function is thus used to check whether the relevant condition for
+        resuming execution is satisfied and should return accordingly.
+
+        :param callback: Function to call by scheduler when checking whether
+            the experiment should remain idle.
+            If callback returns True, experiment will idle; if it returns
+            False, the scheduler will consider the experiment eligible to run
+            and will execute it as soon as there no higher-priority
+            experiments that also want to run.
+
+        Example::
+
+            MyExp(EnvExperiment):
+                def build(self):
+                    self.setattr_device("core")
+                    self.setattr_device("scheduler")
+
+                def run(self):
+                    while True:
+                        self.core.close()
+                        self.scheduler.idle(check_idle)
+                        self.do()
+
+                def check_idle(self):
+                    condition = <describe when experiment should resume>
+                    return False if condition else True
+        """
+        while True:
+            resume = self.idle_raw(callback)
+            if resume:
+                return
+            self.pause()
+
+    @host_only
+    def idle_raw(self, callback):
+        while True:
+            cmd = self.idle_parent(is_idle=bool(callback()))
+            if cmd == "check_still_idle":
+                continue
+            elif cmd == "resume":
+                return True
+            elif cmd == "pause":
+                return False
+            else:
+                raise ValueError(
+                    "Unexpected master command while idle: '{}'".format(cmd))
 
     _check_pause = staticmethod(make_parent_action("scheduler_check_pause"))
     def check_pause(self, rid=None) -> TBool:
@@ -175,7 +248,10 @@ def examine(device_mgr, dataset_mgr, file):
                 (k, (proc.describe(), group, tooltip))
                 for k, (proc, group, tooltip) in argument_mgr.requested_args.items()
             )
-            register_experiment(class_name, name, arginfo, scheduler_defaults)
+            argument_ui = None
+            if hasattr(exp_class, "argument_ui"):
+                argument_ui = exp_class.argument_ui
+            register_experiment(class_name, name, arginfo, argument_ui, scheduler_defaults)
     finally:
         new_keys = set(sys.modules.keys())
         for key in new_keys - previous_keys:

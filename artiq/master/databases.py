@@ -1,7 +1,8 @@
 import asyncio
+import copy
+import tokenize
 
 from artiq.tools import file_import
-
 from sipyco.sync_struct import Notifier, process_mod, update_from_dict
 from sipyco import pyon
 from sipyco.asyncio_tools import TaskObject
@@ -44,6 +45,9 @@ class DatasetDB(TaskObject):
             file_data = pyon.load_file(self.persist_file)
         except FileNotFoundError:
             file_data = dict()
+
+        # Maps dataset keys to tuples (persist, value) containing the data and
+        # indicating whether to save the key to the ``persist_file``.
         self.data = Notifier({k: (True, v) for k, v in file_data.items()})
 
     def save(self):
@@ -76,3 +80,61 @@ class DatasetDB(TaskObject):
     def delete(self, key):
         del self.data[key]
     #
+
+
+def _rid_namespace_name(rid):
+    return "datasets_rid_{}".format(rid)
+
+
+class DatasetNamespaces:
+    """Manages source namespaces for datasets.
+    """
+
+    def __init__(self, dataset_db, gc_timeout_seconds = 10 * 60):
+        #: Duration namespaces are kept alive (for clients to access) after they
+        #: have been finished, in seconds.
+        self.gc_timeout_seconds = gc_timeout_seconds
+
+        self._dataset_db = dataset_db
+        self._publisher = None
+        self._rid_notifiers = dict()
+        self._gc_tasks = dict()
+
+    async def stop(self):
+        tasks = self._gc_tasks.values()
+        if not tasks:
+            return
+        for t in tasks:
+            t.cancel()
+        await asyncio.wait(tasks)
+
+    def set_publisher(self, publisher):
+        assert self._publisher is None
+        self._publisher = publisher
+        for rid in self._rid_notifiers.keys():
+            self._publish_rid(rid)
+
+    def init_rid(self, rid):
+        notifier = Notifier(dict())
+        self._rid_notifiers[rid] = notifier
+        self._publish_rid(rid)
+
+    def update_rid_namespace(self, rid, mod):
+        process_mod(self._rid_notifiers[rid], mod)
+        # Forward to global namespace as well.
+        self._dataset_db.update(copy.deepcopy(mod))
+
+    def finish_rid(self, rid):
+        if rid not in self._rid_notifiers:
+            return
+
+        async def gc():
+            await asyncio.sleep(self.gc_timeout_seconds)
+            self._publisher.remove_notifier(_rid_namespace_name(rid))
+            del self._rid_notifiers[rid]
+            del self._gc_tasks[rid]
+        self._gc_tasks[rid] = asyncio.ensure_future(gc())
+
+    def _publish_rid(self, rid):
+        if self._publisher:
+            self._publisher.add_notifier(_rid_namespace_name(rid), self._rid_notifiers[rid])
