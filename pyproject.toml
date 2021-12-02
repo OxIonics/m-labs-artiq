@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "artiq"
-version = "7.unknown.beta"
+version = "7.7780"
 description = "Advanced Real-Time Infrastructure for Quantum physics"
 authors = ["M-Labs"]
 license = "GPL v3"
@@ -29,6 +29,13 @@ jsonschema = "^4.2.1"
 sipyco = "^1.2"
 
 [tool.poetry.dev-dependencies]
+
+[tool.cibuildwheel.linux]
+before-all = "./add-llvm.sh"
+manylinux-x86_64-image = "manylinux_2_24"
+build= [
+    "cp37-manylinux_x86_64", "cp38-manylinux_x86_64",
+    "cp39-manylinux_x86_64", "cp310-manylinux_x86_64"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0"]

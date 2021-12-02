@@ -1,0 +1,29 @@
+name: Package
+
+on: workflow_dispatch
+
+jobs:
+  build_and_upload_wheel:
+    name: Build and upload wheel
+    container: python
+    runs-on: self-hosted
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Build wheel
+        run: python setup.py bdist_wheel
+
+      - name: Install devpi
+        run: python -m pip install devpi-client==5.2.2
+
+      - name: Setup devpi
+        run: |
+          devpi use ${{ secrets.PYPI_SERVER }}
+          devpi login ${{ secrets.PYPI_LOGIN }} --password=${{ secrets.PYPI_PASSWORD }}
+          devpi use oxionics
+
+      - name: Upload wheel
+        run: devpi upload --from-dir dist/
