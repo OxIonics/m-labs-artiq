@@ -5,3 +5,8 @@ include versioneer.py
 include artiq/_version.py
 include artiq/coredevice/coredevice_generic.schema.json
 include artiq/compiler/kernel.ld
+include artiq/compiler/my-test-file
+include artiq/compiler/llvm-strip
+include artiq/compiler/llvm-addr2line
+include artiq/compiler/llvm-cxxfilt
+include artiq/compiler/ld.lld
