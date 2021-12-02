@@ -8,6 +8,8 @@ llvm.initialize_all_asmprinters()
 
 class RunTool:
     def __init__(self, pattern, **tempdata):
+        pattern[0] = (
+            f"{os.path.dirname(os.path.realpath(__file__))} {pattern[0]}")
         self._pattern   = pattern
         self._tempdata  = tempdata
         self._tempnames = {}
