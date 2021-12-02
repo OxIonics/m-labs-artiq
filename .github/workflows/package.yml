@@ -1,12 +1,14 @@
 name: Package
 
-on: workflow_dispatch
+on: push
 
 jobs:
   build_and_upload_wheel:
     name: Build and upload wheel
-    container: python
+    container: quay.io/pypa/manylinux_2_24_x86_64
     runs-on: self-hosted
+    env:
+      python: /opt/python/cp38-cp38/bin/python
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -14,10 +16,12 @@ jobs:
           fetch-depth: 0
 
       - name: Build wheel
-        run: python setup.py bdist_wheel
+        run: |
+          ./add-llvm.sh
+          $python setup.py bdist_wheel --plat-name=manylinux2_x86_64
 
       - name: Install devpi
-        run: python -m pip install devpi-client==5.2.2
+        run: $python -m pip install devpi-client==5.2.2
 
       - name: Setup devpi
         run: |
