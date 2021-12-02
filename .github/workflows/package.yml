@@ -5,10 +5,8 @@ on: push
 jobs:
   build_and_upload_wheel:
     name: Build and upload wheel
-    container: quay.io/pypa/manylinux_2_24_x86_64
+    container: python
     runs-on: self-hosted
-    env:
-      PYBIN: /opt/python/cp38-cp38/bin/python
     steps:
       - name: Checkout
         uses: actions/checkout@v2
@@ -16,18 +14,16 @@ jobs:
           fetch-depth: 0
 
       - name: Build wheel
-        run: |
-          ./add-llvm.sh
-          $PYBIN setup.py bdist_wheel --plat-name=manylinux2_x86_64
+        run: python setup.py bdist_wheel
 
       - name: Install devpi
-        run: $PYBIN -m pip install devpi-client==5.2.2
+        run: python -m pip install devpi-client==5.2.2
 
       - name: Setup devpi
         run: |
-          $PYBIN -m devpi use ${{ secrets.PYPI_SERVER }}
-          $PYBIN -m devpi login ${{ secrets.PYPI_LOGIN }} --password=${{ secrets.PYPI_PASSWORD }}
-          $PYBIN -m devpi use oxionics
+          devpi use ${{ secrets.PYPI_SERVER }}
+          devpi login ${{ secrets.PYPI_LOGIN }} --password=${{ secrets.PYPI_PASSWORD }}
+          devpi use oxionics
 
       - name: Upload wheel
-        run: $PYBIN -m devpi upload --from-dir dist/
+        run: devpi upload --from-dir dist/
