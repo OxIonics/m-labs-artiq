@@ -1,9 +1,18 @@
 [tool.poetry]
 name = "artiq"
-version = "7.unknown.beta"
+version = "7.0.0-dev"
 description = "Advanced Real-Time Infrastructure for Quantum physics"
 authors = ["M-Labs"]
 license = "GPL v3"
+include = [
+    "artiq/gui/logo*.svg",
+    "versioneer.py",
+    "artiq/_version.py",
+    "artiq/coredevice/coredevice_generic.schema.json",
+    "artiq/compiler/kernel.ld",
+    "artiq/firmware",
+    "artiq/examples",
+]
 
 [[tool.poetry.source]]
 name = "oxionics"
