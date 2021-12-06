@@ -34,6 +34,8 @@ artiq_route = "artiq.frontend.artiq_route:main"
 artiq_run = "artiq.frontend.artiq_run:main"
 artiq_flash = "artiq.frontend.artiq_flash:main"
 aqctl_corelog = "artiq.frontend.aqctl_corelog:main"
+artiq_browser = "artiq.frontend.artiq_browser:main"
+artiq_dashboard = "artiq.frontend.artiq_dashboard:main"
 
 [tool.poetry.dependencies]
 python = ">=3.7,<3.10"
