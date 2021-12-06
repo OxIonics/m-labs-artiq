@@ -19,6 +19,22 @@ name = "oxionics"
 url = "http://server-linux-0:3141/oiuser/oxionics/+simple/"
 default = true
 
+[tool.poetry.scripts]
+artiq_client = "artiq.frontend.artiq_client:main"
+artiq_compile = "artiq.frontend.artiq_compile:main"
+artiq_coreanalyzer = "artiq.frontend.artiq_coreanalyzer:main"
+artiq_coremgmt = "artiq.frontend.artiq_coremgmt:main"
+artiq_ddb_template = "artiq.frontend.artiq_ddb_template:main"
+artiq_master = "artiq.frontend.artiq_master:main"
+artiq_mkfs = "artiq.frontend.artiq_mkfs:main"
+artiq_rtiomon = "artiq.frontend.artiq_rtiomon:main"
+artiq_sinara_tester = "artiq.frontend.artiq_sinara_tester:main"
+artiq_session = "artiq.frontend.artiq_session:main"
+artiq_route = "artiq.frontend.artiq_route:main"
+artiq_run = "artiq.frontend.artiq_run:main"
+artiq_flash = "artiq.frontend.artiq_flash:main"
+aqctl_corelog = "artiq.frontend.aqctl_corelog:main"
+
 [tool.poetry.dependencies]
 python = ">=3.7,<3.10"
 numpy = "^1.21.4"
