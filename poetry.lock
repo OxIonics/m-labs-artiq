@@ -180,6 +180,19 @@ url = "http://server-linux-0:3141/oiuser/oxionics/+simple"
 reference = "oxionics"
 
 [[package]]
+name = "llvmlite"
+version = "0.37.0+0.gd77dc1b.dirty"
+description = "lightweight wrapper around basic LLVM functionality"
+category = "main"
+optional = false
+python-versions = ">=3.7,<3.10"
+
+[package.source]
+type = "legacy"
+url = "http://server-linux-0:3141/oiuser/oxionics/+simple"
+reference = "oxionics"
+
+[[package]]
 name = "markupsafe"
 version = "2.0.1"
 description = "Safely add untrusted strings to HTML/XML markup."
@@ -542,7 +555,7 @@ reference = "oxionics"
 [metadata]
 lock-version = "1.1"
 python-versions = ">=3.7,<3.10"
-content-hash = "e7a61d160c1fd6b41e0f773f5cf08b3f2859adf21717ef52a83ad0dd3746cb88"
+content-hash = "c3088f08e67971eb9aed3341eb41adb67bd7ff0cf5ada71774b23779ec3e229a"
 
 [metadata.files]
 asyncserial = [
@@ -646,6 +659,10 @@ jinja2 = [
 jsonschema = [
     {file = "jsonschema-4.2.1-py3-none-any.whl", hash = "sha256:2a0f162822a64d95287990481b45d82f096e99721c86534f48201b64ebca6e8c"},
     {file = "jsonschema-4.2.1.tar.gz", hash = "sha256:390713469ae64b8a58698bb3cbc3859abe6925b565a973f87323ef21b09a27a8"},
+]
+llvmlite = [
+    {file = "llvmlite-0.37.0+0.gd77dc1b.dirty-cp38-cp38-linux_x86_64.whl", hash = "sha256:ff90eabbf0f2aa7c7d18672f8e61e435e67e2b57004c4faacbd1aa5b6bd75cdc"},
+    {file = "llvmlite-0.37.0+0.gd77dc1b.dirty-cp39-cp39-linux_x86_64.whl", hash = "sha256:65363a44febfba2acd73bfaf37eb4ba7ab5bc946ef09fc8463230a200336d0c3"},
 ]
 markupsafe = [
     {file = "MarkupSafe-2.0.1-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:d8446c54dc28c01e5a2dbac5a25f071f6653e6e40f3a8818e8b45d790fe6ef53"},

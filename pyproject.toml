@@ -52,6 +52,7 @@ migen = "^0.9.2"
 misoc = "^0.12"
 jsonschema = "^4.2.1"
 sipyco = "^1.2"
+llvmlite = "^0.37.0"
 
 [tool.poetry.dev-dependencies]
 
