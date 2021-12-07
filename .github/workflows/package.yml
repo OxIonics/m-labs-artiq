@@ -19,7 +19,9 @@ jobs:
           python -m pip install poetry-dynamic-versioning==0.13.1
 
       - name: Build wheel
-        run: poetry build -f wheel
+        run: |
+          poetry run python before_poetry_build.py
+          poetry build -f wheel
 
       - name: Configure poetry
         run: |
