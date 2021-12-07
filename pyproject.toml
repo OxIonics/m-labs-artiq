@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "artiq"
-version = "7.0.0-dev"
+version = "7.0.beta"
 description = "Advanced Real-Time Infrastructure for Quantum physics"
 authors = ["M-Labs"]
 license = "GPL v3"
@@ -58,6 +58,15 @@ llvmlite = "^0.37.0"
 
 [tool.poetry.dev-dependencies]
 
+[tool.poetry-dynamic-versioning]
+enable = true
+vcs = "git"
+style = "pep440"
+# number of commits since the root commit. 7579 is the number of commits before
+# the 7.0 tag -- this brings us in line with artiq.
+format-jinja = "{{ base.split('.')[0] }}.{{ distance + 7579 }}+g{{ commit }}"
+pattern = "^(?P<base>\\d+(\\.\\d+)*)"
+
 [build-system]
-requires = ["poetry-core>=1.0.0"]
+requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning"]
 build-backend = "poetry.core.masonry.api"
