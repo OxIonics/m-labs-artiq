@@ -5,7 +5,7 @@ on: workflow_dispatch
 jobs:
   build_and_upload_wheel:
     name: Build and upload wheel
-    container: python
+    container: python:3.8-bullseye
     runs-on: self-hosted
     steps:
       - name: Checkout
