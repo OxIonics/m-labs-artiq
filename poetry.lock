@@ -207,7 +207,7 @@ reference = "oxionics"
 
 [[package]]
 name = "migen"
-version = "0.9.2"
+version = "0.9.2+gf401641"
 description = "Python toolbox for building complex digital hardware"
 category = "main"
 optional = false
@@ -223,7 +223,7 @@ reference = "oxionics"
 
 [[package]]
 name = "misoc"
-version = "0.12"
+version = "0.12+g64fc51a0"
 description = "a high performance and small footprint SoC based on Migen"
 category = "main"
 optional = false
@@ -481,7 +481,7 @@ reference = "oxionics"
 
 [[package]]
 name = "sipyco"
-version = "1.2"
+version = "1.2+gf5b2301"
 description = "Simple Python communications"
 category = "main"
 optional = false
@@ -736,10 +736,10 @@ markupsafe = [
     {file = "MarkupSafe-2.0.1.tar.gz", hash = "sha256:594c67807fb16238b30c44bdf74f36c02cdf22d1c8cda91ef8a0ed8dabf5620a"},
 ]
 migen = [
-    {file = "migen-0.9.2-py3-none-any.whl", hash = "sha256:a64698e179e55d7576117a0bdd76bec93326338d07210c7d8fff6184897a2939"},
+    {file = "migen-0.9.2+gf401641-py3-none-any.whl", hash = "sha256:90dd72a7d319a6aeb1917e59378693df19f5bb46142ce371823d54be2c7fc5bc"},
 ]
 misoc = [
-    {file = "misoc-0.12-py3-none-any.whl", hash = "sha256:a1d76ede75631b760031a38ff01297428013ab9e52598b9ea7fac2360708b1eb"},
+    {file = "misoc-0.12+g64fc51a0-py3-none-any.whl", hash = "sha256:3dc2407642b55f7881dd10e9f37525c37a07da1295d90cd5d2bb3c53e1e8dc27"},
 ]
 numpy = [
     {file = "numpy-1.21.4-cp310-cp310-macosx_10_9_universal2.whl", hash = "sha256:8890b3360f345e8360133bc078d2dacc2843b6ee6059b568781b15b97acbe39f"},
@@ -1041,7 +1041,7 @@ scipy = [
     {file = "scipy-1.7.3.tar.gz", hash = "sha256:ab5875facfdef77e0a47d5fd39ea178b58e60e454a4c85aa1e52fcb80db7babf"},
 ]
 sipyco = [
-    {file = "sipyco-1.2-py3-none-any.whl", hash = "sha256:c995f53a7301d3190992eb19b45c2d00e319ded0a41a575a43d006b36bcc80d8"},
+    {file = "sipyco-1.2+gf5b2301-py3-none-any.whl", hash = "sha256:ebf103da0b95dfcc5114383db4e62662ae864c31329867173b90dd7d946d6de7"},
 ]
 six = [
     {file = "six-1.16.0-py2.py3-none-any.whl", hash = "sha256:8abb2f1d86890a2dfb989f9a77cfcfd3e47c2a354b01111771326f8aa26e0254"},
