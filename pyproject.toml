@@ -16,7 +16,7 @@ include = [
 
 [[tool.poetry.source]]
 name = "oxionics"
-url = "http://server-linux-0:3141/oiuser/oxionics/+simple/"
+url = "http://pypi.oxionics.com:3141/oiuser/oxionics/+simple/"
 default = true
 
 [tool.poetry.scripts]
