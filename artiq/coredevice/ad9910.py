@@ -236,7 +236,7 @@ class AD9910:
         """
         self.bus.set_config_mu(urukul.SPI_CONFIG | spi.SPI_END, 24,
                                urukul.SPIT_DDS_WR, self.chip_select)
-        self.bus.write((addr << 24) | (data << 8))
+        self.bus.write((addr << 24) | ((data & 0xffff) << 8))
 
     @kernel
     def write32(self, addr: TInt32, data: TInt32):
@@ -273,12 +273,31 @@ class AD9910:
 
         :param addr: Register address
         """
+        return self.read32_impl(addr)
+
+    @kernel
+    def read32_impl(self, addr):
         self.bus.set_config_mu(urukul.SPI_CONFIG, 8,
                                urukul.SPIT_DDS_WR, self.chip_select)
         self.bus.write((addr | 0x80) << 24)
         self.bus.set_config_mu(
             urukul.SPI_CONFIG | spi.SPI_END | spi.SPI_INPUT,
             32, urukul.SPIT_DDS_RD, self.chip_select)
+        self.bus.write(0)
+        return self.bus.read()
+
+    @kernel
+    def read16(self, addr: TInt32) -> TInt32:
+        """Read from 16 bit register.
+
+        :param addr: Register address
+        """
+        self.bus.set_config_mu(urukul.SPI_CONFIG, 8,
+                               urukul.SPIT_DDS_WR, self.chip_select)
+        self.bus.write((addr | 0x80) << 24)
+        self.bus.set_config_mu(
+            urukul.SPI_CONFIG | spi.SPI_END | spi.SPI_INPUT,
+            16, urukul.SPIT_DDS_RD, self.chip_select)
         self.bus.write(0)
         return self.bus.read()
 
@@ -339,9 +358,11 @@ class AD9910:
         self.bus.set_config_mu(urukul.SPI_CONFIG, 32,
                                urukul.SPIT_DDS_WR, self.chip_select)
         for i in range(len(data) - 1):
+            self.core.break_realtime()
             self.bus.write(data[i])
         self.bus.set_config_mu(urukul.SPI_CONFIG | spi.SPI_END, 32,
                                urukul.SPIT_DDS_WR, self.chip_select)
+        self.core.break_realtime()
         self.bus.write(data[len(data) - 1])
 
     @kernel
@@ -374,18 +395,12 @@ class AD9910:
             data[(n - preload) + i] = self.bus.read()
 
     @kernel
-    def set_cfr1(self,
-                 power_down: TInt32 = 0b0000,
+    def set_cfr1(self, power_down: TInt32 = 0b0000,
                  phase_autoclear: TInt32 = 0,
-                 drg_load_lrr: TInt32 = 0,
-                 drg_autoclear: TInt32 = 0,
-                 phase_clear: TInt32 = 0,
-                 internal_profile: TInt32 = 0,
-                 ram_destination: TInt32 = 0,
-                 ram_enable: TInt32 = 0,
-                 manual_osk_external: TInt32 = 0,
-                 osk_enable: TInt32 = 0,
-                 select_auto_osk: TInt32 = 0):
+                 drg_load_lrr: TInt32 = 0, drg_autoclear: TInt32 = 0, phase_clear: TInt32 = 0,
+                 internal_profile: TInt32 = 0, ram_destination: TInt32 = 0,
+                 ram_enable: TInt32 = 0, manual_osk_external: TInt32 = 0,
+                 osk_enable: TInt32 = 0, select_auto_osk: TInt32 = 0):
         """Set CFR1. See the AD9910 datasheet for parameter meanings.
 
         This method does not pulse IO_UPDATE.
@@ -419,12 +434,8 @@ class AD9910:
                      2)  # SDIO input only, MSB first
 
     @kernel
-    def set_cfr2(self, 
-                 asf_profile_enable: TInt32 = 1, 
-                 drg_enable: TInt32 = 0, 
-                 effective_ftw: TInt32 = 1,
-                 sync_validation_disable: TInt32 = 0, 
-                 matched_latency_enable: TInt32 = 0):
+    def set_cfr2(self, asf_profile_enable=1, drg_enable=0, effective_ftw=1,
+                 sync_validation_disable=0, matched_latency_enable=0):
         """Set CFR2. See the AD9910 datasheet for parameter meanings.
 
         This method does not pulse IO_UPDATE.
@@ -436,7 +447,6 @@ class AD9910:
             (active high) detection of a synchronization pulse sampling error.
         :param matched_latency_enable: Simultaneous application of amplitude,
             phase, and frequency changes to the DDS arrive at the output
-
             * matched_latency_enable = 0: in the order listed
             * matched_latency_enable = 1: simultaneously.
         """
@@ -493,6 +503,7 @@ class AD9910:
                 delay(100 * ms)
             else:
                 # Wait for PLL lock, up to 100 ms
+                delay(10*us)
                 for i in range(100):
                     sta = self.cpld.sta_read()
                     lock = urukul_sta_pll_lock(sta)
@@ -912,10 +923,7 @@ class AD9910:
         self.cpld.cfg_sw(self.chip_select - 4, state)
 
     @kernel
-    def set_sync(self, 
-                 in_delay: TInt32, 
-                 window: TInt32, 
-                 en_sync_gen: TInt32 = 0):
+    def set_sync(self, in_delay: TInt32, window: TInt32, en_sync_gen: TInt32 = 0):
         """Set the relevant parameters in the multi device synchronization
         register. See the AD9910 datasheet for details. The SYNC clock
         generator preset value is set to zero, and the SYNC_OUT generator is
@@ -949,13 +957,14 @@ class AD9910:
         """
         self.set_cfr2(sync_validation_disable=1)  # clear SMP_ERR
         self.cpld.io_update.pulse(1 * us)
-        delay(10 * us)  # slack
+        delay(10*us)  # slack
         self.set_cfr2(sync_validation_disable=0)  # enable SMP_ERR
         self.cpld.io_update.pulse(1 * us)
 
     @kernel
     def tune_sync_delay(self,
-                        search_seed: TInt32 = 15) -> TTuple([TInt32, TInt32]):
+                        search_seed: TInt32 = 15,
+                        cpld_channel_idx: TInt32 = -1) -> TTuple([TInt32, TInt32]):
         """Find a stable SYNC_IN delay.
 
         This method first locates a valid SYNC_IN delay at zero validation
@@ -971,6 +980,10 @@ class AD9910:
             Defaults to 15 (half range).
         :return: Tuple of optimal delay and window size.
         """
+        if cpld_channel_idx == -1:
+            cpld_channel_idx = self.chip_select - 4
+        if not 0 <= cpld_channel_idx < 4:
+            raise ValueError("Invalid channel index: {}", int64(cpld_channel_idx))
         if not self.cpld.sync_div:
             raise ValueError("parent cpld does not drive SYNC")
         search_span = 31
@@ -993,7 +1006,7 @@ class AD9910:
                 delay(100 * us)
                 err = urukul_sta_smp_err(self.cpld.sta_read())
                 delay(100 * us)  # slack
-                if not (err >> (self.chip_select - 4)) & 1:
+                if not (err >> cpld_channel_idx) & 1:
                     next_seed = in_delay
                     break
             if next_seed >= 0:  # valid delay found, scan next window
