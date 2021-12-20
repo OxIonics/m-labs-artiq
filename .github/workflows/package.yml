@@ -20,7 +20,7 @@ jobs:
 
       - name: Build wheel
         run: |
-          poetry run python before_poetry_build.py
+          ./before_poetry_build.sh
           poetry build -f wheel
 
       - name: Configure poetry
