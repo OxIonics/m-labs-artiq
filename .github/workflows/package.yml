@@ -1,6 +1,11 @@
 name: Package
 
-on: workflow_dispatch
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+  pull_request:
 
 jobs:
   build_and_upload_wheel:
@@ -24,10 +29,12 @@ jobs:
           poetry build -f wheel
 
       - name: Configure poetry
+        if: github.event_name == 'push'
         run: |
-          poetry config repositories.oxionics  ${{ secrets.PYPI_SERVER }}
+          poetry config repositories.oxionics ${{ secrets.PYPI_SERVER }}
           poetry config http-basic.oxionics \
             ${{ secrets.PYPI_LOGIN }} ${{ secrets.PYPI_PASSWORD }}
 
       - name: Upload wheel
+        if: github.event_name == 'push'
         run: poetry publish -r oxionics
