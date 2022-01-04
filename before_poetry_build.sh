@@ -1,4 +1,4 @@
 #!/usr/bin/env bash
 set -eu
 
-poetry version --short > artiq/_version.py
+python before_poetry_build.py $(poetry version --short)
