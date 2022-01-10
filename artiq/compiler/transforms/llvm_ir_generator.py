@@ -39,6 +39,94 @@ def memoize(generator):
     return memoized
 
 
+class DebugInfoEmitter:
+    def __init__(self, llmodule):
+        self.llmodule = llmodule
+        self.llcompileunit = None
+        self.cache = {}
+
+        llident = self.llmodule.add_named_metadata('llvm.ident')
+        llident.add(self.emit_metadata(["ARTIQ"]))
+
+        llflags = self.llmodule.add_named_metadata('llvm.module.flags')
+        llflags.add(self.emit_metadata([2, "Debug Info Version", 3]))
+        llflags.add(self.emit_metadata([2, "Dwarf Version", 4]))
+
+    def emit_metadata(self, operands):
+        def map_operand(operand):
+            if operand is None:
+                return ll.Constant(llmetadata, None)
+            elif isinstance(operand, str):
+                return ll.MetaDataString(self.llmodule, operand)
+            elif isinstance(operand, int):
+                return ll.Constant(lli32, operand)
+            elif isinstance(operand, (list, tuple)):
+                return self.emit_metadata(operand)
+            else:
+                assert isinstance(operand, ll.NamedValue)
+                return operand
+        return self.llmodule.add_metadata(list(map(map_operand, operands)))
+
+    def emit_debug_info(self, kind, operands, is_distinct=False):
+        return self.llmodule.add_debug_info(kind, operands, is_distinct)
+
+    @memoize
+    def emit_file(self, source_buffer):
+        source_dir, source_file = os.path.split(source_buffer.name)
+        return self.emit_debug_info("DIFile", {
+            "filename":        source_file,
+            "directory":       source_dir,
+        })
+
+    @memoize
+    def emit_compile_unit(self, source_buffer):
+        return self.emit_debug_info("DICompileUnit", {
+            "language":        ll.DIToken("DW_LANG_Python"),
+            "file":            self.emit_file(source_buffer),
+            "producer":        "ARTIQ",
+            "runtimeVersion":  0,
+            "emissionKind":    2,   # full=1, lines only=2
+        }, is_distinct=True)
+
+    @memoize
+    def emit_subroutine_type(self, typ):
+        return self.emit_debug_info("DISubroutineType", {
+            "types":           self.emit_metadata([None])
+        })
+
+    @memoize
+    def emit_subprogram(self, func, llfunc):
+        source_buffer = func.loc.source_buffer
+
+        if self.llcompileunit is None:
+            self.llcompileunit = self.emit_compile_unit(source_buffer)
+            llcompileunits = self.llmodule.add_named_metadata('llvm.dbg.cu')
+            llcompileunits.add(self.llcompileunit)
+
+        display_name = "{}{}".format(func.name, types.TypePrinter().name(func.type))
+        return self.emit_debug_info("DISubprogram", {
+            "name":            func.name,
+            "linkageName":     llfunc.name,
+            "type":            self.emit_subroutine_type(func.type),
+            "file":            self.emit_file(source_buffer),
+            "line":            func.loc.line(),
+            "unit":            self.llcompileunit,
+            "scope":           self.emit_file(source_buffer),
+            "scopeLine":       func.loc.line(),
+            "isLocal":         func.is_internal,
+            "isDefinition":    True,
+            "retainedNodes":   self.emit_metadata([])
+        }, is_distinct=True)
+
+    @memoize
+    def emit_loc(self, loc, scope):
+        return self.emit_debug_info("DILocation", {
+            "line":            loc.line(),
+            "column":          loc.column(),
+            "scope":           scope
+        })
+
+
 class ABILayoutInfo:
     """Caches DataLayout size/alignment lookup results.
 
@@ -84,6 +172,7 @@ class LLVMIRGenerator:
         self.llmap = {}
         self.llobject_map = {}
         self.phis = []
+        self.debug_info_emitter = DebugInfoEmitter(self.llmodule)
         self.empty_metadata = self.llmodule.add_metadata([])
         self.quote_fail_msg = None
 
@@ -564,6 +653,10 @@ class LLVMIRGenerator:
             self.llbuilder = ll.IRBuilder()
             llblock_map = {}
 
+            if not func.is_generated:
+                lldisubprogram = self.debug_info_emitter.emit_subprogram(func, self.llfunction)
+                self.llfunction.set_metadata('dbg', lldisubprogram)
+
             # First, map arguments.
             if self.has_sret(func.type):
                 llactualargs = self.llfunction.args[1:]
@@ -583,6 +676,10 @@ class LLVMIRGenerator:
             for block in func.basic_blocks:
                 self.llbuilder.position_at_end(self.llmap[block])
                 for insn in block.instructions:
+                    if insn.loc is not None and not func.is_generated:
+                        self.llbuilder.debug_metadata = \
+                            self.debug_info_emitter.emit_loc(insn.loc, lldisubprogram)
+
                     llinsn = getattr(self, "process_" + type(insn).__name__)(insn)
                     assert llinsn is not None
                     self.llmap[insn] = llinsn
@@ -1174,26 +1271,32 @@ class LLVMIRGenerator:
         else:
             llfun = self.map(insn.static_target_function)
         llenv     = self.llbuilder.extract_value(llclosure, 0, name="env.fun")
-        return llfun, [llenv] + list(llargs)
+        return llfun, [llenv] + list(llargs), {}
 
     def _prepare_ffi_call(self, insn):
         llargs = []
-        byvals = []
+        llarg_attrs = {}
         for i, arg in enumerate(insn.arguments()):
             llarg = self.map(arg)
             if isinstance(llarg.type, (ll.LiteralStructType, ll.IdentifiedStructType)):
                 llslot = self.llbuilder.alloca(llarg.type)
                 self.llbuilder.store(llarg, llslot)
                 llargs.append(llslot)
-                byvals.append(i)
+                llarg_attrs[i] = "byval"
             else:
                 llargs.append(llarg)
+
+        llretty = self.llty_of_type(insn.type, for_return=True)
+        is_sret = self.needs_sret(llretty)
+        if is_sret:
+            llarg_attrs = {i + 1: a for (i, a) in llarg_attrs.items()}
+            llarg_attrs[0] = "sret"
 
         llfunname = insn.target_function().type.name
         llfun     = self.llmodule.globals.get(llfunname)
         if llfun is None:
-            llretty = self.llty_of_type(insn.type, for_return=True)
-            if self.needs_sret(llretty):
+            # Function has not been declared in the current LLVM module, do it now.
+            if is_sret:
                 llfunty = ll.FunctionType(llvoid, [llretty.as_pointer()] +
                                           [llarg.type for llarg in llargs])
             else:
@@ -1201,17 +1304,14 @@ class LLVMIRGenerator:
 
             llfun = ll.Function(self.llmodule, llfunty,
                                 insn.target_function().type.name)
-            if self.needs_sret(llretty):
-                llfun.args[0].add_attribute('sret')
-                byvals = [i + 1 for i in byvals]
-            for i in byvals:
-                llfun.args[i].add_attribute('byval')
+            for idx, attr in llarg_attrs.items():
+                llfun.args[idx].add_attribute(attr)
             if 'nounwind' in insn.target_function().type.flags:
                 llfun.attributes.add('nounwind')
             if 'nowrite' in insn.target_function().type.flags:
                 llfun.attributes.add('inaccessiblememonly')
 
-        return llfun, list(llargs)
+        return llfun, list(llargs), llarg_attrs
 
     def _build_rpc(self, fun_loc, fun_type, args, llnormalblock, llunwindblock):
         llservice = ll.Constant(lli32, fun_type.service)
@@ -1246,12 +1346,12 @@ class LLVMIRGenerator:
             self.engine.process(diag)
         tag += ir.rpc_tag(fun_type.ret, ret_error_handler)
 
+        llstackptr = self.llbuilder.call(self.llbuiltin("llvm.stacksave"), [],
+                                         name="rpc.stack")
+
         lltag = self.llconst_of_const(ir.Constant(tag, builtins.TStr()))
         lltagptr = self.llbuilder.alloca(lltag.type)
         self.llbuilder.store(lltag, lltagptr)
-
-        llstackptr = self.llbuilder.call(self.llbuiltin("llvm.stacksave"), [],
-                                         name="rpc.stack")
 
         llargs = self.llbuilder.alloca(llptr, ll.Constant(lli32, len(args)),
                                        name="rpc.args")
@@ -1347,20 +1447,21 @@ class LLVMIRGenerator:
                                    insn.arguments(),
                                    llnormalblock=None, llunwindblock=None)
         elif types.is_external_function(functiontyp):
-            llfun, llargs = self._prepare_ffi_call(insn)
+            llfun, llargs, llarg_attrs = self._prepare_ffi_call(insn)
         else:
-            llfun, llargs = self._prepare_closure_call(insn)
+            llfun, llargs, llarg_attrs = self._prepare_closure_call(insn)
 
         if self.has_sret(functiontyp):
             llstackptr = self.llbuilder.call(self.llbuiltin("llvm.stacksave"), [])
 
             llresultslot = self.llbuilder.alloca(llfun.type.pointee.args[0].pointee)
-            llcall = self.llbuilder.call(llfun, [llresultslot] + llargs)
+            self.llbuilder.call(llfun, [llresultslot] + llargs, arg_attrs=llarg_attrs)
             llresult = self.llbuilder.load(llresultslot)
 
             self.llbuilder.call(self.llbuiltin("llvm.stackrestore"), [llstackptr])
         else:
-            llcall = llresult = self.llbuilder.call(llfun, llargs, name=insn.name)
+            llresult = self.llbuilder.call(llfun, llargs, name=insn.name,
+                                           arg_attrs=llarg_attrs)
 
             if isinstance(llresult.type, ll.VoidType):
                 # We have NoneType-returning functions return void, but None is
@@ -1379,16 +1480,17 @@ class LLVMIRGenerator:
                                    insn.arguments(),
                                    llnormalblock, llunwindblock)
         elif types.is_external_function(functiontyp):
-            llfun, llargs = self._prepare_ffi_call(insn)
+            llfun, llargs, llarg_attrs = self._prepare_ffi_call(insn)
         else:
-            llfun, llargs = self._prepare_closure_call(insn)
+            llfun, llargs, llarg_attrs = self._prepare_closure_call(insn)
 
         if self.has_sret(functiontyp):
             llstackptr = self.llbuilder.call(self.llbuiltin("llvm.stacksave"), [])
 
             llresultslot = self.llbuilder.alloca(llfun.type.pointee.args[0].pointee)
             llcall = self.llbuilder.invoke(llfun, [llresultslot] + llargs,
-                                           llnormalblock, llunwindblock, name=insn.name)
+                                           llnormalblock, llunwindblock, name=insn.name,
+                                           arg_attrs=llarg_attrs)
 
             self.llbuilder.position_at_start(llnormalblock)
             llresult = self.llbuilder.load(llresultslot)
@@ -1396,7 +1498,7 @@ class LLVMIRGenerator:
             self.llbuilder.call(self.llbuiltin("llvm.stackrestore"), [llstackptr])
         else:
             llcall = self.llbuilder.invoke(llfun, llargs, llnormalblock, llunwindblock,
-                                           name=insn.name)
+                                           name=insn.name, arg_attrs=llarg_attrs)
             llresult = llcall
 
             # The !tbaa metadata is not legal to use with the invoke instruction,
