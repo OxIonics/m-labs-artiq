@@ -57,6 +57,7 @@ sipyco = "^1.2"
 llvmlite = "^0.37.0"
 pyqt5-qt5 = "^5.15.2"
 pyqt5-sip = "^12.9.0"
+paramiko = { version = "^2.9.2", optional = true }
 
 [tool.poetry.dev-dependencies]
 
@@ -72,3 +73,6 @@ pattern = "^(?P<base>\\d+(\\.\\d+)*)"
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning"]
 build-backend = "poetry.core.masonry.api"
+
+[tool.poetry.extras]
+remote-flashing = ["paramiko"]
