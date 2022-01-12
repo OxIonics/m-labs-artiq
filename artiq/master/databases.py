@@ -103,8 +103,6 @@ class DatasetDB(TaskObject):
 
     def delete(self, key):
         del self.data[key]
-<<<<<<< HEAD
-    #
 
 
 def _rid_namespace_name(rid):
@@ -163,5 +161,3 @@ class DatasetNamespaces:
     def _publish_rid(self, rid):
         if self._publisher:
             self._publisher.add_notifier(_rid_namespace_name(rid), self._rid_notifiers[rid])
-=======
->>>>>>> 5e1847
