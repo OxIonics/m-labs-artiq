@@ -437,12 +437,12 @@ class CommKernel:
             self._write_bool(value)
         elif tag == "i":
             check(isinstance(value, (int, numpy.int32)) and
-                  (-2**31 < value < 2**31-1),
+                  (-2**31 <= value < 2**31),
                   lambda: "32-bit int")
             self._write_int32(value)
         elif tag == "I":
             check(isinstance(value, (int, numpy.int32, numpy.int64)) and
-                  (-2**63 < value < 2**63-1),
+                  (-2**63 <= value < 2**63),
                   lambda: "64-bit int")
             self._write_int64(value)
         elif tag == "f":
@@ -451,8 +451,8 @@ class CommKernel:
             self._write_float64(value)
         elif tag == "F":
             check(isinstance(value, Fraction) and
-                  (-2**63 < value.numerator < 2**63-1) and
-                  (-2**63 < value.denominator < 2**63-1),
+                  (-2**63 <= value.numerator < 2**63) and
+                  (-2**63 <= value.denominator < 2**63),
                   lambda: "64-bit Fraction")
             self._write_int64(value.numerator)
             self._write_int64(value.denominator)
@@ -476,11 +476,19 @@ class CommKernel:
             if tag_element == "b":
                 self._write(bytes(value))
             elif tag_element == "i":
-                self._write(struct.pack(self.endian + "%sl" %
-                                        len(value), *value))
+                try:
+                    self._write(struct.pack(self.endian + "%sl" % len(value), *value))
+                except struct.error:
+                    raise RPCReturnValueError(
+                        "type mismatch: cannot serialize {value} as {type}".format(
+                            value=repr(value), type="32-bit integer list"))
             elif tag_element == "I":
-                self._write(struct.pack(self.endian + "%sq" %
-                                        len(value), *value))
+                try:
+                    self._write(struct.pack(self.endian + "%sq" % len(value), *value))
+                except struct.error:
+                    raise RPCReturnValueError(
+                        "type mismatch: cannot serialize {value} as {type}".format(
+                            value=repr(value), type="64-bit integer list"))
             elif tag_element == "f":
                 self._write(struct.pack(self.endian + "%sd" %
                                         len(value), *value))
@@ -555,14 +563,6 @@ class CommKernel:
 
         try:
             result = service(*args, **kwargs)
-            logger.debug("rpc service: %d %r %r = %r",
-                         service_id, args, kwargs, result)
-
-            self._write_header(Request.RPCReply)
-            self._write_bytes(return_tags)
-            self._send_rpc_value(bytearray(return_tags),
-                                 result, result, service)
-            self._flush()
         except RPCReturnValueError as exn:
             raise
         except Exception as exn:
@@ -608,6 +608,14 @@ class CommKernel:
                 self._write_int32(line)
                 self._write_int32(-1)  # column not known
                 self._write_string(function)
+            self._flush()
+        else:
+            logger.debug("rpc service: %d %r %r = %r",
+                         service_id, args, kwargs, result)
+            self._write_header(Request.RPCReply)
+            self._write_bytes(return_tags)
+            self._send_rpc_value(bytearray(return_tags),
+                                 result, result, service)
             self._flush()
 
     def _serve_exception(self, embedding_map, symbolizer, demangler):

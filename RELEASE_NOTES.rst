@@ -11,6 +11,7 @@ Highlights:
 * New hardware support:
    - Kasli-SoC, a new EEM carrier based on a Zynq SoC, enabling much faster kernel execution.
    - HVAMP_8CH 8 channel HV amplifier for Fastino / Zotinos
+   - Almazny mezzanine board for Mirny
 * Softcore targets now use the RISC-V architecture (VexRiscv) instead of OR1K (mor1kx).
 * Faster compilation for large arrays/lists.
 * Phaser:
@@ -31,10 +32,6 @@ Highlights:
 * Previously detected RTIO async errors are reported to the host after each kernel terminates and a
   warning is logged. The warning is additional to the one already printed in the core device log upon
   detection of the error.
-* HDF5 options can now be passed when creating datasets with ``set_dataset``. This allows
-  in particular to use transparent compression filters as follows:
-  ``set_dataset(name, value, hdf5_options={"compression": "gzip"})``.
-* Removed worker DB warning for writing a dataset that is also in the archive
 
 Breaking changes:
 
@@ -50,10 +47,6 @@ Breaking changes:
   calling `ADF5356.init()`.
 * DRTIO: Changed message alignment from 32-bits to 64-bits.
 * The deprecated ``set_dataset(..., save=...)`` is no longer supported.
-* The internal dataset representation was changed to support tracking HDF5 options like e.g.
-  a compression method. This requires changes to code reading the dataset persistence file
-  (``dataset_db.pyon``) and to custom applets.
-
 
 ARTIQ-6
 -------
@@ -85,7 +78,7 @@ Highlights:
    - Improved performance for kernel RPC involving list and array.
 * Coredevice SI to mu conversions now always return valid codes, or raise a ``ValueError``.
 * Zotino now exposes  ``voltage_to_mu()``
-* ``ad9910``: 
+* ``ad9910``:
    - The maximum amplitude scale factor is now ``0x3fff`` (was ``0x3ffe`` before).
    - The default single-tone profile is now 7 (was 0).
    - Added option to ``set_mu()`` that affects the ASF, FTW and POW registers
@@ -127,7 +120,6 @@ Breaking changes:
   ``cpld_devices`` and ``dds_devices``, rather than four individual arguments.
 * Experiment classes with underscore-prefixed names are now ignored when ``artiq_client``
   determines which experiment to submit (consistent with ``artiq_run``).
-
 
 ARTIQ-5
 -------
