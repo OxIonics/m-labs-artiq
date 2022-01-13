@@ -36,15 +36,6 @@ class DeviceDB:
         return desc
 
 
-def make_dataset(*, persist=False, value=None, hdf5_options=None):
-    "PYON-serializable representation of a dataset in the DatasetDB"
-    return {
-        "persist": persist,
-        "value": value,
-        "hdf5_options": hdf5_options or {},
-    }
-
-
 class DatasetDB(TaskObject):
     def __init__(self, persist_file, autosave_period=30):
         self.persist_file = persist_file
@@ -54,24 +45,10 @@ class DatasetDB(TaskObject):
             file_data = pyon.load_file(self.persist_file)
         except FileNotFoundError:
             file_data = dict()
-
-        self.data = Notifier(
-            {
-                k: make_dataset(
-                    persist=True,
-                    value=v["value"],
-                    hdf5_options=v["hdf5_options"]
-                )
-                for k, v in file_data.items()
-            }
-        )
+        self.data = Notifier({k: (True, v) for k, v in file_data.items()})
 
     def save(self):
-        data = {
-            k: d
-            for k, d in self.data.raw_view.items()
-            if d["persist"]
-        }
+        data = {k: v[1] for k, v in self.data.raw_view.items() if v[0]}
         pyon.store_file(self.persist_file, data)
 
     async def _do(self):
@@ -83,26 +60,23 @@ class DatasetDB(TaskObject):
             self.save()
 
     def get(self, key):
-        return self.data.raw_view[key]
+        return self.data.raw_view[key][1]
 
     def update(self, mod):
         process_mod(self.data, mod)
 
     # convenience functions (update() can be used instead)
-    def set(self, key, value, persist=None, hdf5_options=None):
+    def set(self, key, value, persist=None):
         if persist is None:
             if key in self.data.raw_view:
-                persist = self.data.raw_view[key]["persist"]
+                persist = self.data.raw_view[key][0]
             else:
                 persist = False
-        self.data[key] = make_dataset(
-            persist=persist,
-            value=value,
-            hdf5_options=hdf5_options,
-        )
+        self.data[key] = (persist, value)
 
     def delete(self, key):
         del self.data[key]
+<<<<<<< HEAD
 
 
 def _rid_namespace_name(rid):
@@ -161,3 +135,6 @@ class DatasetNamespaces:
     def _publish_rid(self, rid):
         if self._publisher:
             self._publisher.add_notifier(_rid_namespace_name(rid), self._rid_notifiers[rid])
+=======
+    #
+>>>>>>> parent of 311a818a (Merge pull request #1544 from airwoodix/dataset-compression)
