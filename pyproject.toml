@@ -60,6 +60,7 @@ pyqt5-sip = "^12.9.0"
 paramiko = { version = "^2.9.2", optional = true }
 
 [tool.poetry.dev-dependencies]
+pytest = "^6.2.5"
 
 [tool.poetry-dynamic-versioning]
 enable = true
