@@ -58,6 +58,10 @@ llvmlite = "^0.37.0"
 pyqt5-qt5 = "^5.15.2"
 pyqt5-sip = "^12.9.0"
 paramiko = { version = "^2.9.2", optional = true }
+sphinx = {version = "^4.3.2", optional = true}
+sphinx-rtd-theme = {version = "^1.0.0", optional = true}
+sphinx-argparse = {version = "^0.3.1", optional = true}
+sphinxcontrib-wavedrom = {version = "^3.0.2", optional = true}
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.2.5"
@@ -77,3 +81,4 @@ build-backend = "poetry.core.masonry.api"
 
 [tool.poetry.extras]
 remote-flashing = ["paramiko"]
+build-docs = ["sphinx", "sphinx_rtd_theme", "sphinx-argparse", "sphinxcontrib-wavedrom"]
