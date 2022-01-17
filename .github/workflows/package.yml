@@ -9,32 +9,8 @@ on:
 
 jobs:
   build_and_upload_wheel:
-    name: Build and upload wheel
-    container: python:3.8-bullseye
-    runs-on: self-hosted
-    steps:
-      - name: Checkout
-        uses: actions/checkout@v2
-        with:
-          fetch-depth: 0
-
-      - name: Install poetry
-        run: |
-          python -m pip install poetry==1.1.12
-          python -m pip install poetry-dynamic-versioning==0.13.1
-
-      - name: Build wheel
-        run: |
-          ./before_poetry_build.sh
-          poetry build -f wheel
-
-      - name: Configure poetry
-        if: github.event_name == 'push'
-        run: |
-          poetry config repositories.oxionics ${{ secrets.PYPI_SERVER }}
-          poetry config http-basic.oxionics \
-            ${{ secrets.PYPI_LOGIN }} ${{ secrets.PYPI_PASSWORD }}
-
-      - name: Upload wheel
-        if: github.event_name == 'push'
-        run: poetry publish -r oxionics
+    uses: OxIonics/common-workflows/.github/workflows/package.yml@master
+    secrets:
+      PYPI_SERVER: ${{ secrets.PYPI_SERVER }}
+      PYPI_LOGIN: ${{ secrets.PYPI_LOGIN }}
+      PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
