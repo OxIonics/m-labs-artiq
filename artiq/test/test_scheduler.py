@@ -629,7 +629,7 @@ class SchedulerCase(unittest.TestCase):
         # Make sure EmptyExperiment completes normally now.
         self.run_async(empty_status_events["run_done"].wait())
 
-        self.run_async(scheduler.stop())
+        self.run_async(scheduler.stop(), timeout=30)
 
     def tearDown(self):
         self.loop.close()
