@@ -23,5 +23,4 @@ class TestFrontends(unittest.TestCase):
                        for name in names):
             subprocess.check_call(
                 [sys.executable, "-m", "artiq.frontend." + module, "--help"],
-                stdout=subprocess.DEVNULL,
-                stderr=subprocess.STDOUT)
+            )
