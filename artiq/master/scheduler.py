@@ -1,18 +1,21 @@
 import asyncio
 import logging
-from enum import Enum
+from enum import Enum, unique
 from time import time
+from functools import partial
 
-from sipyco.sync_struct import Notifier
+from sipyco.sync_struct import Notifier, process_mod
 from sipyco.asyncio_tools import TaskObject, Condition
 
-from artiq.master.worker import Worker, log_worker_exception
+from artiq.master.worker import (Worker, log_worker_exception, ResumeAction,
+                                 RunResult)
 from artiq.tools import asyncio_wait_or_cancel
 
 
 logger = logging.getLogger(__name__)
 
 
+@unique
 class RunStatus(Enum):
     pending = 0
     flushing = 1
@@ -23,12 +26,14 @@ class RunStatus(Enum):
     analyzing = 6
     deleting = 7
     paused = 8
+    idle = 9
 
 
 def _mk_worker_method(name):
     async def worker_method(self, *args, **kwargs):
         if self.worker.closed.is_set():
-            return True
+            # Worker already killed.
+            return RunResult.completed
         m = getattr(self.worker, name)
         try:
             return await m(*args, **kwargs)
@@ -38,8 +43,7 @@ def _mk_worker_method(name):
             if self.worker.closed.is_set():
                 logger.debug("suppressing worker exception of terminated run",
                              exc_info=True)
-                # Return completion on termination
-                return True
+                return RunResult.completed
             else:
                 raise
     return worker_method
@@ -58,7 +62,17 @@ class Run:
         self.due_date = due_date
         self.flush = flush
 
-        self.worker = Worker(pool.worker_handlers)
+        # Update datasets through rid namespace.
+        handlers = pool.worker_handlers
+        namespaces = pool.dataset_namespaces
+        if namespaces:
+            namespaces.init_rid(rid)
+            handlers = {
+                **handlers,
+                "update_dataset": partial(namespaces.update_rid_namespace, rid)
+            }
+        self.worker = Worker(handlers)
+
         self.termination_requested = False
 
         self._status = RunStatus.pending
@@ -113,7 +127,8 @@ class Run:
 
 
 class RunPool:
-    def __init__(self, ridc, worker_handlers, notifier, experiment_db):
+    def __init__(self, ridc, worker_handlers, notifier, experiment_db,
+                 dataset_namespaces):
         self.runs = dict()
         self.state_changed = Condition()
 
@@ -121,6 +136,7 @@ class RunPool:
         self.worker_handlers = worker_handlers
         self.notifier = notifier
         self.experiment_db = experiment_db
+        self.dataset_namespaces = dataset_namespaces
 
     def submit(self, expid, priority, due_date, flush, pipeline_name):
         # mutates expid to insert head repository revision if None.
@@ -199,13 +215,14 @@ class PrepareStage(TaskObject):
             else:
                 if run.flush:
                     run.status = RunStatus.flushing
-                    while not all(r.status in (RunStatus.pending,
-                                               RunStatus.deleting)
-                                  or r.priority < run.priority
-                                  or r is run
-                                  for r in self.pool.runs.values()):
-                        ev = [self.pool.state_changed.wait(),
-                              run.worker.closed.wait()]
+                    while not all(
+                            r.status in (RunStatus.pending, RunStatus.deleting)
+                            or r.priority < run.priority or r is run
+                            for r in self.pool.runs.values()):
+                        ev = [
+                            self.pool.state_changed.wait(),
+                            run.worker.closed.wait()
+                        ]
                         await asyncio_wait_or_cancel(
                             ev, return_when=asyncio.FIRST_COMPLETED)
                         if run.worker.closed.is_set():
@@ -230,7 +247,26 @@ class RunStage(TaskObject):
         self.pool = pool
         self.delete_cb = delete_cb
 
-    def _get_run(self):
+        #: Runs that are running/paused, kept in order of ascending priority.
+        self._run_stack = []
+
+        #: Runs that might be idle, i.e. should be resumed with the
+        #: check_idle_only action to check before scheduling them in.
+        self._idle_runs = set()
+
+        self._runs_to_unidle = []
+
+        #: Makes sure `highest_priority_run()` isn't invoked multiple times
+        #: while waiting for experiments to report back idle status. The lock
+        #: should never be contended in normal operation, as only this main
+        #: coroutine (_do) should call `highest_priority_run()` (for
+        #: scheduling, or from within `check_pause()`). Having it is cheap,
+        #: though, and makes sure e.g. tests can call it out-of-band.
+        self._priority_lock = asyncio.Lock()
+
+    def _next_prepared_run(self):
+        """Return the highest-priority run from the pool that is done preparing
+        and ready to be run."""
         prepared_runs = filter(lambda r: r.status == RunStatus.prepare_done,
                                self.pool.runs.values())
         try:
@@ -240,43 +276,165 @@ class RunStage(TaskObject):
             r = None
         return r
 
-    async def _do(self):
-        stack = []
+    async def _check_if_still_idle(self, run):
+        """Wake up a given run that is assumed to be paused and check whether
+        it should still be considered idle."""
+        if run.termination_requested:
+            return False
 
-        while True:
-            next_irun = self._get_run()
-            if not stack or (
-                    next_irun is not None and
-                    next_irun.priority_key() > stack[-1].priority_key()):
-                while next_irun is None:
-                    await self.pool.state_changed.wait()
-                    next_irun = self._get_run()
-                stack.append(next_irun)
+        if run.status == RunStatus.deleting:
+            # Idle run was forcibly terminated. Un-idle it so it can be cleaned up in
+            # the main loop.
+            return False
 
-            run = stack.pop()
+        delete_run = False
+        if run.status == RunStatus.idle:
             try:
-                if run.status == RunStatus.paused:
-                    run.status = RunStatus.running
-                    # clear "termination requested" flag now
-                    # so that if it is set again during the resume, this
-                    # results in another exception.
-                    request_termination = run.termination_requested
-                    run.termination_requested = False
-                    completed = await run.resume(request_termination)
-                else:
-                    run.status = RunStatus.running
-                    completed = await run.run()
+                run_result = await run.resume(ResumeAction.check_still_idle)
+                # The worker just got killed, e.g. during shutdown, so we need to
+                # make sure not to attempt communication again.
+                if run_result == RunResult.completed:
+                    delete_run = True
             except:
-                logger.error("got worker exception in run stage, "
-                             "deleting RID %d", run.rid)
+                logger.error(
+                    "got worker exception in idle callback, deleting RID %d",
+                    run.rid)
+                log_worker_exception()
+                delete_run = True
+        else:
+            logger.error(
+                "got unexpected status while checking RID %s "
+                "for idleness, deleting: %s", run.rid, run.status)
+            delete_run = True
+
+        if delete_run:
+            self.delete_cb(run.rid)
+            return False
+
+        return run_result == RunResult.idle
+
+    async def highest_priority_run(self):
+        """Return the run to schedule on the next permanent context switch.
+
+        Blocks for runs to become available if there aren't currently any.
+        """
+        async with self._priority_lock:
+            while True:
+                # Find the first non-idle run on the stack.
+                top_run = None
+                for run in reversed(self._run_stack):
+                    if (run not in self._idle_runs
+                            or not await self._check_if_still_idle(run)):
+                        top_run = run
+                        break
+
+                prepared_run = self._next_prepared_run()
+                if (prepared_run and
+                    (not top_run or
+                     (prepared_run.priority_key() > top_run.priority_key()))):
+
+                    # Insert the prepared run at the correct position of the
+                    # stack.
+                    prepared_priority = prepared_run.priority_key()
+                    idx = len(self._run_stack)
+                    while idx > 0:
+                        priority = self._run_stack[idx - 1].priority_key()
+                        if prepared_priority > priority:
+                            break
+                        idx -= 1
+                    self._run_stack.insert(idx, prepared_run)
+                    top_run = prepared_run
+
+                if top_run:
+                    # Un-idle all runs with lower priority to pause them.
+                    for run in self._run_stack:
+                        if run in self._idle_runs:
+                            self._runs_to_unidle.append(run)
+                            self._idle_runs.remove(run)
+                        if run == top_run:
+                            break
+                    return top_run
+
+                timeout = None if not self._idle_runs else 0.2
+                await asyncio_wait_or_cancel([self.pool.state_changed.wait()],
+                    timeout=timeout)
+
+    async def _do(self):
+        while True:
+            # Get the highest-priority run to execute, blocking if necessary.
+            #
+            # At the end of the iteration, `run` will either be removed from
+            # the run stack, or will still be incomplete, with `resume()` to be
+            # invoked again in the future.
+            run = await self.highest_priority_run()
+
+            # Un-idle all the runs that are of lower priority than the run about
+            # to be executed. The worker should immediately pause.
+            for unidle_run in self._runs_to_unidle:
+                if unidle_run == run:
+                    break
+                if unidle_run.status != RunStatus.idle:
+                    logger.error("unexpected status %s pausing RID %s from idle",
+                                 unidle_run.status, unidle_run.rid)
+                unidle_run.status = RunStatus.running
+                unidle_result = RunResult(await
+                                          unidle_run.resume(ResumeAction.pause))
+                if unidle_run.status != RunStatus.running:
+                    logger.error(
+                        "unexpected status %s after pausing RID %s from idle",
+                        unidle_run.status, unidle_run.rid)
+                unidle_run.status = RunStatus.paused
+            self._runs_to_unidle.clear()
+
+            if run.status not in (RunStatus.paused, RunStatus.prepare_done,
+                    RunStatus.idle):
+                if run.status != RunStatus.deleting:
+                    logger.error("unexpected run status %s for RID %s",
+                        run.status, run.rid)
+                if run in self._idle_runs:
+                    self._idle_runs.remove(run)
+                self._run_stack.remove(run)
+                continue
+
+            try:
+                if run.status == RunStatus.prepare_done:
+                    run.status = RunStatus.running
+                    run_result = await run.run()
+                else:
+                    if run.termination_requested:
+                        if run.status == RunStatus.idle:
+                            # If the run is currently idle, tell it to pause
+                            # (which will then throw).
+                            action = ResumeAction.pause
+                        else:
+                            action = ResumeAction.request_termination
+                            # Clear "termination requested" flag so another
+                            # exception will be triggered if it is set again
+                            # during the resumed run.
+                            run.termination_requested = False
+                    else:
+                        action = ResumeAction.resume
+                    run.status = RunStatus.running
+                    run_result = await run.resume(action)
+
+                run_result = RunResult(run_result)  # no-op type assertion
+            except:
+                logger.error(
+                    "got worker exception in run stage, deleting RID %d",
+                    run.rid)
                 log_worker_exception()
                 self.delete_cb(run.rid)
+                self._run_stack.remove(run)
             else:
-                if completed:
+                if run_result == RunResult.completed:
                     run.status = RunStatus.run_done
+                    self._run_stack.remove(run)
                 else:
-                    run.status = RunStatus.paused
-                    stack.append(run)
+                    if run_result == RunResult.idle:
+                        run.status = RunStatus.idle
+                        self._idle_runs.add(run)
+                    else:
+                        run.status = RunStatus.paused
 
 
 class AnalyzeStage(TaskObject):
@@ -311,8 +469,10 @@ class AnalyzeStage(TaskObject):
 
 
 class Pipeline:
-    def __init__(self, ridc, deleter, worker_handlers, notifier, experiment_db):
-        self.pool = RunPool(ridc, worker_handlers, notifier, experiment_db)
+    def __init__(self, ridc, deleter, worker_handlers, notifier, experiment_db,
+                 dataset_namespaces):
+        self.pool = RunPool(ridc, worker_handlers, notifier, experiment_db,
+                            dataset_namespaces)
         self._prepare = PrepareStage(self.pool, deleter.delete)
         self._run = RunStage(self.pool, deleter.delete)
         self._analyze = AnalyzeStage(self.pool, deleter.delete)
@@ -335,8 +495,9 @@ class Deleter(TaskObject):
     :meth:`RunPool.delete` is an async function (it needs to close the worker
     connection, etc.), so we maintain a queue of RIDs to delete on a background task.
     """
-    def __init__(self, pipelines):
+    def __init__(self, pipelines, dataset_namespaces):
         self._pipelines = pipelines
+        self._dataset_namespaces = dataset_namespaces
         self._queue = asyncio.Queue()
 
     def delete(self, rid):
@@ -361,6 +522,8 @@ class Deleter(TaskObject):
             if rid in pipeline.pool.runs:
                 logger.debug("deleting RID %d...", rid)
                 await pipeline.pool.delete(rid)
+                if self._dataset_namespaces:
+                    self._dataset_namespaces.finish_rid(rid)
                 logger.debug("deletion of RID %d completed", rid)
                 break
 
@@ -383,16 +546,17 @@ class Deleter(TaskObject):
 
 
 class Scheduler:
-    def __init__(self, ridc, worker_handlers, experiment_db):
+    def __init__(self, ridc, worker_handlers, experiment_db, dataset_namespaces):
         self.notifier = Notifier(dict())
 
         self._pipelines = dict()
         self._worker_handlers = worker_handlers
         self._experiment_db = experiment_db
+        self._dataset_namespaces = dataset_namespaces
         self._terminated = False
 
         self._ridc = ridc
-        self._deleter = Deleter(self._pipelines)
+        self._deleter = Deleter(self._pipelines, dataset_namespaces)
 
     def start(self):
         self._deleter.start()
@@ -423,7 +587,7 @@ class Scheduler:
             logger.debug("creating pipeline '%s'", pipeline_name)
             pipeline = Pipeline(self._ridc, self._deleter,
                                 self._worker_handlers, self.notifier,
-                                self._experiment_db)
+                                self._experiment_db, self._dataset_namespaces)
             self._pipelines[pipeline_name] = pipeline
             pipeline.start()
         return pipeline.pool.submit(expid, priority, due_date, flush, pipeline_name)
@@ -437,7 +601,7 @@ class Scheduler:
         for pipeline in self._pipelines.values():
             if rid in pipeline.pool.runs:
                 run = pipeline.pool.runs[rid]
-                if run.status == RunStatus.running or run.status == RunStatus.paused:
+                if run.status in (RunStatus.running, RunStatus.paused, RunStatus.idle):
                     run.termination_requested = True
                 else:
                     self.delete(rid)
@@ -450,32 +614,28 @@ class Scheduler:
         Must not be modified."""
         return self.notifier.raw_view
 
-    def check_pause(self, rid):
+    async def check_pause(self, rid):
         """Returns ``True`` if there is a condition that could make ``pause``
         not return immediately (termination requested or higher priority run).
 
-        The typical purpose of this function is to check from a kernel
-        whether returning control to the host and pausing would have an effect,
-        in order to avoid the cost of switching kernels in the common case
-        where ``pause`` does nothing.
+        This is typically used to check from a kernel whether pausing would
+        have any effect, in order to avoid the cost of switching kernels in
+        the common case where ``pause`` does nothing.
 
-        This function does not have side effects, and does not have to be
-        followed by a call to ``pause``.
+        This function returns quickly, and does not have to be followed by a
+        call to ``pause``.
         """
-        for pipeline in self._pipelines.values():
-            if rid in pipeline.pool.runs:
-                run = pipeline.pool.runs[rid]
-                if run.status != RunStatus.running:
-                    return False
-                if run.termination_requested:
-                    return True
+        for p in self._pipelines.values():
+            if rid in p.pool.runs:
+                pipeline = p
+                break
+        else:
+            raise KeyError("RID not found")
 
-                prepared_runs = filter(lambda r: r.status == RunStatus.prepare_done,
-                                       pipeline.pool.runs.values())
-                try:
-                    r = max(prepared_runs, key=lambda r: r.priority_key())
-                except ValueError:
-                    # prepared_runs is an empty sequence
-                    return False
-                return r.priority_key() > run.priority_key()
-        raise KeyError("RID not found")
+        run = pipeline.pool.runs[rid]
+        if run.status != RunStatus.running:
+            return False
+        if run.termination_requested:
+            return True
+
+        return run != (await pipeline._run.highest_priority_run())

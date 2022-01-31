@@ -14,7 +14,7 @@ from sipyco.asyncio_tools import atexit_register_coroutine
 
 from artiq import __version__ as artiq_version
 from artiq.master.log import log_args, init_log
-from artiq.master.databases import DeviceDB, DatasetDB
+from artiq.master.databases import DeviceDB, DatasetDB, DatasetNamespaces
 from artiq.master.scheduler import Scheduler
 from artiq.master.rid_counter import RIDCounter
 from artiq.master.experiments import (FilesystemBackend, GitBackend,
@@ -97,6 +97,10 @@ def main():
     dataset_db = DatasetDB(args.dataset_db)
     dataset_db.start()
     atexit_register_coroutine(dataset_db.stop)
+
+    dataset_namespaces = DatasetNamespaces(dataset_db)
+    atexit_register_coroutine(dataset_namespaces.stop)
+
     worker_handlers = dict()
 
     if args.git:
@@ -107,7 +111,8 @@ def main():
         repo_backend, worker_handlers, args.experiment_subdir)
     atexit.register(experiment_db.close)
 
-    scheduler = Scheduler(RIDCounter(), worker_handlers, experiment_db)
+    scheduler = Scheduler(RIDCounter(), worker_handlers, experiment_db,
+                          dataset_namespaces)
     scheduler.start()
     atexit_register_coroutine(scheduler.stop)
 
@@ -145,6 +150,7 @@ def main():
         "explist": experiment_db.explist,
         "explist_status": experiment_db.status
     })
+    dataset_namespaces.set_publisher(server_notify)
     loop.run_until_complete(server_notify.start(
         bind, args.port_notify))
     atexit_register_coroutine(server_notify.stop)

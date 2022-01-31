@@ -1,7 +1,8 @@
 import asyncio
+import copy
+import tokenize
 
 from artiq.tools import file_import
-
 from sipyco.sync_struct import Notifier, process_mod, update_from_dict
 from sipyco import pyon
 from sipyco.asyncio_tools import TaskObject

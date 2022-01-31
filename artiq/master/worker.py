@@ -10,9 +10,25 @@ from sipyco.logging_tools import LogParser
 from sipyco.packed_exceptions import current_exc_packed
 
 from artiq.tools import asyncio_wait_or_cancel
+from enum import Enum, unique
 
 
 logger = logging.getLogger(__name__)
+
+
+@unique
+class RunResult(Enum):
+    completed = 0
+    running = 1
+    idle = 2
+
+
+@unique
+class ResumeAction(Enum):
+    check_still_idle = "check_still_idle"
+    pause = "pause"
+    resume = "resume"
+    request_termination = "request_termination"
 
 
 class WorkerTimeout(Exception):
@@ -212,9 +228,12 @@ class Worker:
                 raise WorkerWatchdogTimeout
             action = obj["action"]
             if action == "completed":
-                return True
+                return RunResult.completed
+            elif action == "idle":
+                is_idle = obj["kwargs"]["is_idle"]
+                return RunResult.idle if is_idle else RunResult.running
             elif action == "pause":
-                return False
+                return RunResult.running
             elif action == "exception":
                 raise WorkerInternalException
             elif action == "create_watchdog":
@@ -226,7 +245,10 @@ class Worker:
             else:
                 func = self.handlers[action]
             try:
-                data = func(*obj["args"], **obj["kwargs"])
+                if asyncio.iscoroutinefunction(func):
+                    data = (await func(*obj["args"], **obj["kwargs"]))
+                else:
+                    data = func(*obj["args"], **obj["kwargs"])
                 reply = {"status": "ok", "data": data}
             except:
                 reply = {
@@ -275,20 +297,25 @@ class Worker:
         await self._worker_action({"action": "prepare"})
 
     async def run(self):
-        completed = await self._worker_action({"action": "run"})
-        if not completed:
+        run_result = await self._worker_action({"action": "run"})
+        if run_result != RunResult.completed:
             self.yield_time = time.monotonic()
-        return completed
+        return run_result
 
-    async def resume(self, request_termination):
+    async def resume(self, resume_action):
         stop_duration = time.monotonic() - self.yield_time
-        for wid, expiry in self.watchdogs:
+        for wid in self.watchdogs.items():
             self.watchdogs[wid] += stop_duration
-        completed = await self._worker_action({"status": "ok",
-                                               "data": request_termination})
-        if not completed:
+        timeout = None
+        if resume_action == ResumeAction.check_still_idle:
+            timeout = 1.0
+        run_result = await self._worker_action({
+            "status": "ok",
+            "data": resume_action.value
+        }, timeout)
+        if not run_result:
             self.yield_time = time.monotonic()
-        return completed
+        return run_result
 
     async def analyze(self):
         await self._worker_action({"action": "analyze"})
@@ -300,8 +327,10 @@ class Worker:
         await self._create_process(logging.WARNING)
         r = dict()
 
-        def register(class_name, name, arginfo, scheduler_defaults):
-            r[class_name] = {"name": name, "arginfo": arginfo, "scheduler_defaults": scheduler_defaults}
+        def register(class_name, name, arginfo, argument_ui, scheduler_defaults):
+            r[class_name] = {"name": name, "arginfo": arginfo,
+                             "scheduler_defaults": scheduler_defaults,
+                             "argument_ui": argument_ui}
         self.register_experiment = register
         await self._worker_action({"action": "examine", "file": file},
                                   timeout)

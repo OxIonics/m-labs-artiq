@@ -154,7 +154,7 @@ class DatasetManager:
     def get(self, key, archive=False):
         if key in self.local:
             return self.local[key]
-        
+
         data = self.ddb.get(key)
         if archive:
             if key in self.archive:

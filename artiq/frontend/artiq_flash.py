@@ -40,7 +40,7 @@ Prerequisites:
     * Connect the board through its/a JTAG adapter.
     * Have OpenOCD installed and in your $PATH.
     * Have access to the JTAG adapter's devices. Udev rules from OpenOCD:
-      'sudo cp openocd/contrib/99-openocd.rules /etc/udev/rules.d'
+      'sudo cp openocd/contrib/60-openocd.rules /etc/udev/rules.d'
       and replug the device. Ensure you are member of the
       plugdev group: 'sudo adduser $USER plugdev' and re-login.
 """)
