@@ -116,6 +116,9 @@ class SchedulerCase(unittest.TestCase):
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
 
+    def run_async(self, coro, timeout=1):
+        return self.loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout))
+
     def test_steps(self):
         loop = self.loop
         scheduler = Scheduler(_RIDCounter(0), dict(), None, None)
@@ -505,59 +508,59 @@ class SchedulerCase(unittest.TestCase):
         scheduler.start()
 
         expid_idle = _get_expid("IdleExperiment")
-        # Suppress the SystemExit backtrace when worker process is killed.
-        expid_idle["log_level"] = logging.CRITICAL
+        # Show backtraces from the worker process, shame about SystemExit
+        # but the others are potentially very important.
+        expid_idle["log_level"] = logging.WARNING
         scheduler.submit("main", expid_idle, 0, None, False)
 
         return scheduler, status_events, flags
 
     def test_close_with_idle_running(self):
         """Check scheduler exits with experiment still idle"""
-        loop = self.loop
         scheduler, status_events, flags = self._make_scheduler_for_idle_test()
-        loop.run_until_complete(status_events["running"].wait())
+        self.run_async(status_events["running"].wait())
         flags.be_idle = True
-        loop.run_until_complete(status_events["idle"].wait())
-        loop.run_until_complete(scheduler.stop())
+        self.run_async(status_events["idle"].wait())
+        self.run_async(scheduler.stop())
 
     def test_close_with_prepared_bg(self):
         """Check scheduler exits when there is still a prepare_done experiment"""
         loop = self.loop
         scheduler, status_events, _ = self._make_scheduler_for_idle_test()
 
-        loop.run_until_complete(status_events["running"].wait())
+        self.run_async(status_events["running"].wait())
 
         # Submit lower-priority experiment that is still waiting to be run when
         # the scheduler is terminated.
         expid = _get_expid("EmptyExperiment")
         scheduler.submit("main", expid, -1, None, False)
 
-        loop.run_until_complete(scheduler.stop())
+        self.run_async(scheduler.stop())
 
     def test_resume_idle(self):
         """Check scheduler resumes previously idle experiments"""
         loop = self.loop
         scheduler, status_events, flags = self._make_scheduler_for_idle_test()
-        loop.run_until_complete(status_events["running"].wait())
+        self.run_async(status_events["running"].wait())
 
         # Make sure we can un-idle by returning False from the idle callback.
         flags.be_idle = True
-        loop.run_until_complete(status_events["idle"].wait())
+        self.run_async(status_events["idle"].wait())
 
         status_events["running"].clear()
         flags.be_idle = False
-        loop.run_until_complete(status_events["running"].wait())
+        self.run_async(status_events["running"].wait())
 
         # Make sure we can un-idle by requesting termination.
         flags.be_idle = True
-        loop.run_until_complete(status_events["idle"].wait())
+        self.run_async(status_events["idle"].wait())
 
         self.assertFalse(flags.termination_ok)
         scheduler.request_termination(0)
-        loop.run_until_complete(status_events["deleting"].wait())
+        self.run_async(status_events["deleting"].wait())
         self.assertTrue(flags.termination_ok)
 
-        loop.run_until_complete(scheduler.stop())
+        self.run_async(scheduler.stop())
 
     def test_idle_bg(self):
         """Check scheduler runs lower-priority experiments while idle"""
@@ -568,39 +571,39 @@ class SchedulerCase(unittest.TestCase):
             1, scheduler.notifier.publish)
         scheduler.notifier.publish = notify
 
-        loop.run_until_complete(idle_status_events["running"].wait())
+        self.run_async(idle_status_events["running"].wait())
 
         # Submit experiment with lower priority.
         expid = _get_expid("BackgroundExperiment")
         scheduler.submit("main", expid, -1, None, False)
 
-        check_pause_1 = lambda: loop.run_until_complete(scheduler.check_pause(1))
+        check_pause_1 = lambda: self.run_async(scheduler.check_pause(1))
 
-        loop.run_until_complete(bg_status_events["prepare_done"].wait())
+        self.run_async(bg_status_events["prepare_done"].wait())
 
         flags.be_idle = True
-        loop.run_until_complete(bg_status_events["running"].wait())
+        self.run_async(bg_status_events["running"].wait())
         self.assertFalse(check_pause_1())
 
         idle_status_events["running"].clear()
         flags.be_idle = False
-        loop.run_until_complete(idle_status_events["running"].wait())
+        self.run_async(idle_status_events["running"].wait())
 
         bg_status_events["running"].clear()
         flags.be_idle = True
         self.assertFalse(check_pause_1())
-        loop.run_until_complete(bg_status_events["running"].wait())
+        self.run_async(bg_status_events["running"].wait())
 
         idle_status_events["running"].clear()
         flags.be_idle = False
         self.assertTrue(check_pause_1())
-        loop.run_until_complete(idle_status_events["running"].wait())
+        self.run_async(idle_status_events["running"].wait())
 
         scheduler.request_termination(0)
         scheduler.request_termination(1)
-        loop.run_until_complete(bg_status_events["deleting"].wait())
+        self.run_async(bg_status_events["deleting"].wait())
 
-        loop.run_until_complete(scheduler.stop())
+        self.run_async(scheduler.stop())
 
     def test_idle_timeout(self):
         """Check that blocking is_idle_callback times out"""
@@ -620,13 +623,13 @@ class SchedulerCase(unittest.TestCase):
         logging.disable(logging.ERROR)
         flags.be_idle = True
         flags.take_long_in_idle = True
-        loop.run_until_complete(status_events["deleting"].wait())
+        self.run_async(status_events["deleting"].wait(), timeout=20)
         logging.disable(logging.NOTSET)
 
         # Make sure EmptyExperiment completes normally now.
-        loop.run_until_complete(empty_status_events["run_done"].wait())
+        self.run_async(empty_status_events["run_done"].wait())
 
-        loop.run_until_complete(scheduler.stop())
+        self.run_async(scheduler.stop(), timeout=30)
 
     def tearDown(self):
         self.loop.close()

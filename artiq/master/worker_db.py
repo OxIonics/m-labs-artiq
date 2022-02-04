@@ -5,10 +5,8 @@ standalone command line tools).
 """
 
 from operator import setitem
-import h5py
 import importlib
 import logging
-import numpy
 
 from sipyco.sync_struct import Notifier
 from sipyco.pc_rpc import AutoTarget, Client, BestEffortClient
@@ -118,11 +116,6 @@ class DatasetManager:
         self._broadcaster.publish = ddb.update
 
     def set(self, key, value, broadcast=False, persist=False, archive=True):
-        if key in self.archive:
-            logger.warning("Modifying dataset '%s' which is in archive, "
-                           "archive will remain untouched",
-                           key, stack_info=True)
-
         if persist:
             broadcast = True
 
@@ -164,9 +157,6 @@ class DatasetManager:
 
         data = self.ddb.get(key)
         if archive:
-            if key in self.archive:
-                logger.warning("Dataset '%s' is already in archive, "
-                               "overwriting", key, stack_info=True)
             self.archive[key] = data
         return data
 

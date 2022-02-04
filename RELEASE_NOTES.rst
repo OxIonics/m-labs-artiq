@@ -32,6 +32,7 @@ Highlights:
 * Previously detected RTIO async errors are reported to the host after each kernel terminates and a
   warning is logged. The warning is additional to the one already printed in the core device log upon
   detection of the error.
+* Removed worker DB warning for writing a dataset that is also in the archive
 
 Breaking changes:
 
