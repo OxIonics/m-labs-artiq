@@ -237,9 +237,9 @@ class Phaser:
 
         for data in self.dac_mmap:
             self.dac_write(data >> 16, data)
-            delay(40*us)
+            delay(50*us)
         self.dac_sync()
-        delay(40*us)
+        delay(100*us)
 
         # pll_ndivsync_ena disable
         config18 = self.dac_read(0x18)
@@ -290,11 +290,11 @@ class Phaser:
 
         # avoid malformed output for: mixer_ena=1, nco_ena=0 after power up
         self.dac_write(self.dac_mmap[2] >> 16, self.dac_mmap[2] | (1 << 4))
-        delay(40*us)
+        delay(50*us)
         self.dac_sync()
         delay(100*us)
         self.dac_write(self.dac_mmap[2] >> 16, self.dac_mmap[2])
-        delay(40*us)
+        delay(50*us)
         self.dac_sync()
         delay(100*us)
 
@@ -717,6 +717,7 @@ class Phaser:
         for o in range(8):
             # set new fifo_offset
             self.dac_write(0x09, (config9 & 0x1fff) | (o << 13))
+            delay(100*us)
             self.clear_dac_alarms()
             delay(.1*ms)   # run
             alarms = self.get_dac_alarms()
