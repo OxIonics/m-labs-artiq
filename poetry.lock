@@ -1322,7 +1322,7 @@ remote-flashing = ["paramiko"]
 [metadata]
 lock-version = "1.1"
 python-versions = "~3.8"
-content-hash = "e534f546f6fa9b798ae2f6699b87e1e3fd2752ffa3622dfdf2422a6ce26987b8"
+content-hash = "746391bf2919c95c75dc179067f2030cdd1f27cd639b5c0e5c1d8050a556566a"
 
 [metadata.files]
 alabaster = [
@@ -1968,6 +1968,7 @@ regex = [
     {file = "regex-2022.1.18-cp39-cp39-musllinux_1_1_x86_64.whl", hash = "sha256:defa0652696ff0ba48c8aff5a1fac1eef1ca6ac9c660b047fc8e7623c4eb5093"},
     {file = "regex-2022.1.18-cp39-cp39-win32.whl", hash = "sha256:6db1b52c6f2c04fafc8da17ea506608e6be7086715dab498570c3e55e4f8fbd1"},
     {file = "regex-2022.1.18-cp39-cp39-win_amd64.whl", hash = "sha256:ebaeb93f90c0903233b11ce913a7cb8f6ee069158406e056f884854c737d2442"},
+    {file = "regex-2022.1.18.tar.gz", hash = "sha256:97f32dc03a8054a4c4a5ab5d761ed4861e828b2c200febd4e46857069a483916"},
 ]
 requests = [
     {file = "requests-2.27.1-py2.py3-none-any.whl", hash = "sha256:f22fa1e554c9ddfd16e6e41ac79759e17be9e492b3587efa038054674760e72d"},
