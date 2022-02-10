@@ -1,3 +1,5 @@
+from typing import Optional
+
 import sys
 import os
 import asyncio
@@ -57,17 +59,119 @@ def log_worker_exception():
         logger.error("worker exception details", exc_info=True)
 
 
+class WorkerTransport:
+
+    async def create(self, log_level, log_source_cb):
+        raise NotImplementedError()
+
+    async def send(self, msg: str):
+        raise NotImplementedError()
+
+    async def recv(self):
+        raise NotImplementedError()
+
+    async def close(self, term_timeout, rid):
+        raise NotImplementedError()
+
+
+class PipeWorkerTransport(WorkerTransport):
+
+    def __init__(self):
+        self.io_lock = asyncio.Lock()
+        self.ipc = None
+
+    async def create(self, log_level, log_source_cb):
+        if self.ipc is not None:
+            return  # process already exists, recycle
+        async with self.io_lock:
+            self.ipc = pipe_ipc.AsyncioParentComm()
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            await self.ipc.create_subprocess(
+                sys.executable, "-m", "artiq.master.worker_impl",
+                self.ipc.get_address(), str(log_level),
+                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                env=env, start_new_session=True)
+            asyncio.ensure_future(
+                LogParser(log_source_cb).stream_task(
+                    self.ipc.process.stdout))
+            asyncio.ensure_future(
+                LogParser(log_source_cb).stream_task(
+                    self.ipc.process.stderr))
+
+    async def close(self, term_timeout, rid):
+        async with self.io_lock:
+            if self.ipc is None:
+                # Note the %s - self.rid can be None or a user string
+                logger.debug("worker was not created (RID %s)", rid)
+                return
+            if self.ipc.process.returncode is not None:
+                logger.debug("worker already terminated (RID %s)", rid)
+                if self.ipc.process.returncode != 0:
+                    logger.warning("worker finished with status code %d"
+                                   " (RID %s)", self.ipc.process.returncode,
+                                   rid)
+                return
+            try:
+                await asyncio.wait_for(
+                    self._send(pyon.encode({"action": "terminate"})),
+                    timeout=term_timeout,
+                )
+                await asyncio.wait_for(self.ipc.process.wait(), term_timeout)
+                logger.debug("worker exited on request (RID %s)", rid)
+                return
+            except:
+                logger.debug("worker failed to exit on request"
+                             " (RID %s), ending the process", rid,
+                             exc_info=True)
+            if os.name != "nt":
+                try:
+                    self.ipc.process.terminate()
+                except ProcessLookupError:
+                    pass
+                try:
+                    await asyncio.wait_for(self.ipc.process.wait(),
+                                           term_timeout)
+                    logger.debug("worker terminated (RID %s)", rid)
+                    return
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "worker did not terminate (RID %s), killing", rid)
+            try:
+                self.ipc.process.kill()
+            except ProcessLookupError:
+                pass
+            try:
+                await asyncio.wait_for(self.ipc.process.wait(), term_timeout)
+                logger.debug("worker killed (RID %s)", rid)
+                return
+            except asyncio.TimeoutError:
+                logger.warning("worker refuses to die (RID %s)", rid)
+
+    async def send(self, msg: str):
+        async with self.io_lock:
+            await self._send(msg)
+
+    async def _send(self, msg: str):
+        assert self.io_lock.locked()
+        self.ipc.write((msg + "\n").encode())
+        await self.ipc.drain()
+
+    async def recv(self):
+        async with self.io_lock:
+            return await self.ipc.readline()
+
+
 class Worker:
     def __init__(self, handlers=dict(), send_timeout=10.0):
+        self._transport: WorkerTransport = PipeWorkerTransport()
         self.handlers = handlers
         self.send_timeout = send_timeout
 
         self.rid = None
         self.filename = None
-        self.ipc = None
         self.watchdogs = dict()  # wid -> expiration (using time.monotonic)
 
-        self.io_lock = asyncio.Lock()
         self.closed = asyncio.Event()
 
     def create_watchdog(self, t):
@@ -93,28 +197,9 @@ class Worker:
         return "worker({},{})".format(self.rid, self.filename)
 
     async def _create_process(self, log_level):
-        if self.ipc is not None:
-            return  # process already exists, recycle
-        await self.io_lock.acquire()
-        try:
-            if self.closed.is_set():
-                raise WorkerError("Attempting to create process after close")
-            self.ipc = pipe_ipc.AsyncioParentComm()
-            env = os.environ.copy()
-            env["PYTHONUNBUFFERED"] = "1"
-            await self.ipc.create_subprocess(
-                sys.executable, "-m", "artiq.master.worker_impl",
-                self.ipc.get_address(), str(log_level),
-                stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                env=env, start_new_session=True)
-            asyncio.ensure_future(
-                LogParser(self._get_log_source).stream_task(
-                    self.ipc.process.stdout))
-            asyncio.ensure_future(
-                LogParser(self._get_log_source).stream_task(
-                    self.ipc.process.stderr))
-        finally:
-            self.io_lock.release()
+        if self.closed.is_set():
+            raise WorkerError("Attempting to create process after close")
+        await self._transport.create(log_level, self._get_log_source)
 
     async def close(self, term_timeout=2.0):
         """Interrupts any I/O with the worker process and terminates the
@@ -123,59 +208,11 @@ class Worker:
         This method should always be called by the user to clean up, even if
         build() or examine() raises an exception."""
         self.closed.set()
-        await self.io_lock.acquire()
-        try:
-            if self.ipc is None:
-                # Note the %s - self.rid can be None or a user string
-                logger.debug("worker was not created (RID %s)", self.rid)
-                return
-            if self.ipc.process.returncode is not None:
-                logger.debug("worker already terminated (RID %s)", self.rid)
-                if self.ipc.process.returncode != 0:
-                    logger.warning("worker finished with status code %d"
-                                   " (RID %s)", self.ipc.process.returncode,
-                                   self.rid)
-                return
-            try:
-                await self._send({"action": "terminate"}, cancellable=False)
-                await asyncio.wait_for(self.ipc.process.wait(), term_timeout)
-                logger.debug("worker exited on request (RID %s)", self.rid)
-                return
-            except:
-                logger.debug("worker failed to exit on request"
-                             " (RID %s), ending the process", self.rid,
-                             exc_info=True)
-            if os.name != "nt":
-                try:
-                    self.ipc.process.terminate()
-                except ProcessLookupError:
-                    pass
-                try:
-                    await asyncio.wait_for(self.ipc.process.wait(),
-                                           term_timeout)
-                    logger.debug("worker terminated (RID %s)", self.rid)
-                    return
-                except asyncio.TimeoutError:
-                    logger.warning(
-                        "worker did not terminate (RID %s), killing", self.rid)
-            try:
-                self.ipc.process.kill()
-            except ProcessLookupError:
-                pass
-            try:
-                await asyncio.wait_for(self.ipc.process.wait(), term_timeout)
-                logger.debug("worker killed (RID %s)", self.rid)
-                return
-            except asyncio.TimeoutError:
-                logger.warning("worker refuses to die (RID %s)", self.rid)
-        finally:
-            self.io_lock.release()
+        await self._transport.close(term_timeout, self.rid)
 
     async def _send(self, obj, cancellable=True):
-        assert self.io_lock.locked()
         line = pyon.encode(obj)
-        self.ipc.write((line + "\n").encode())
-        ifs = [self.ipc.drain()]
+        ifs = [self._transport.send(line)]
         if cancellable:
             ifs.append(self.closed.wait())
         fs = await asyncio_wait_or_cancel(
@@ -193,9 +230,8 @@ class Worker:
                     self.rid))
 
     async def _recv(self, timeout):
-        assert self.io_lock.locked()
         fs = await asyncio_wait_or_cancel(
-            [self.ipc.readline(), self.closed.wait()],
+            [self._transport.recv(), self.closed.wait()],
             timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
         if all(f.cancelled() for f in fs):
             raise WorkerTimeout(
@@ -219,11 +255,7 @@ class Worker:
     async def _handle_worker_requests(self):
         while True:
             try:
-                await self.io_lock.acquire()
-                try:
-                    obj = await self._recv(self.watchdog_time())
-                finally:
-                    self.io_lock.release()
+                obj = await self._recv(self.watchdog_time())
             except WorkerTimeout:
                 raise WorkerWatchdogTimeout
             action = obj["action"]
@@ -255,21 +287,13 @@ class Worker:
                     "status": "failed",
                     "exception": current_exc_packed()
                 }
-            await self.io_lock.acquire()
-            try:
-                await self._send(reply)
-            finally:
-                self.io_lock.release()
+            await self._send(reply)
 
     async def _worker_action(self, obj, timeout=None):
         if timeout is not None:
             self.watchdogs[-1] = time.monotonic() + timeout
         try:
-            await self.io_lock.acquire()
-            try:
-                await self._send(obj)
-            finally:
-                self.io_lock.release()
+            await self._send(obj)
             try:
                 completed = await self._handle_worker_requests()
             except WorkerTimeout:
