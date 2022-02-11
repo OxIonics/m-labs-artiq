@@ -2,9 +2,10 @@ import asyncio
 import logging
 import os
 import subprocess
+from typing import AsyncIterable, Tuple
+
 import sys
 
-from sipyco.logging_tools import LogParser
 from sipyco import pipe_ipc, pyon
 
 logger = logging.getLogger(__name__)
@@ -12,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class WorkerTransport:
 
-    async def create(self, log_level, log_source_cb):
+    async def create(self, log_level) -> Tuple[AsyncIterable, AsyncIterable]:
         raise NotImplementedError()
 
     async def send(self, msg: str):
@@ -31,7 +32,7 @@ class PipeWorkerTransport(WorkerTransport):
         self.io_lock = asyncio.Lock()
         self.ipc = None
 
-    async def create(self, log_level, log_source_cb):
+    async def create(self, log_level):
         if self.ipc is not None:
             return  # process already exists, recycle
         async with self.io_lock:
@@ -43,12 +44,10 @@ class PipeWorkerTransport(WorkerTransport):
                 self.ipc.get_address(), str(log_level),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=env, start_new_session=True)
-            asyncio.ensure_future(
-                LogParser(log_source_cb).stream_task(
-                    self.ipc.process.stdout))
-            asyncio.ensure_future(
-                LogParser(log_source_cb).stream_task(
-                    self.ipc.process.stderr))
+            return (
+                self.ipc.process.stdout,
+                self.ipc.process.stderr,
+            )
 
     async def close(self, term_timeout, rid):
         async with self.io_lock:

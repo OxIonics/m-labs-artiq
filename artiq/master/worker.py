@@ -3,8 +3,10 @@ import os
 import asyncio
 import logging
 import time
+from typing import AsyncIterable
 
 from sipyco import pyon
+from sipyco.logging_tools import LogParser
 from sipyco.packed_exceptions import current_exc_packed
 
 from artiq.master.worker_transport import PipeWorkerTransport, WorkerTransport
@@ -56,9 +58,29 @@ def log_worker_exception():
         logger.error("worker exception details", exc_info=True)
 
 
+async def _iterate_logs(source_cb, stream_name, log_lines: AsyncIterable[bytes]):
+    # Heavily inspired by sipyco.logging_tools.LogParser.stream_task but this
+    # will work with any AsyncIterable not just StreamReaders
+    log_parser = LogParser(source_cb)
+    async for entry in log_lines:
+        try:
+            if not entry:
+                break
+            log_parser.line_input(entry.decode().rstrip("\r\n"))
+        except:
+            logger.debug("exception in log forwarding", exc_info=True)
+            break
+    logger.debug(
+        "stopped log forwarding of stream %s of %s",
+        stream_name, source_cb()
+    )
+
+
 class Worker:
-    def __init__(self, handlers=dict(), send_timeout=10.0):
-        self._transport: WorkerTransport = PipeWorkerTransport()
+    def __init__(self, handlers=dict(), transport=None, send_timeout=10.0):
+        if transport is None:
+            transport = PipeWorkerTransport()
+        self._transport: WorkerTransport = transport
         self.handlers = handlers
         self.send_timeout = send_timeout
 
@@ -93,7 +115,10 @@ class Worker:
     async def _create_process(self, log_level):
         if self.closed.is_set():
             raise WorkerError("Attempting to create process after close")
-        await self._transport.create(log_level, self._get_log_source)
+        (stdout, stderr) = await self._transport.create(log_level)
+
+        asyncio.create_task(_iterate_logs(self._get_log_source, "stdout", stdout))
+        asyncio.create_task(_iterate_logs(self._get_log_source, "stderr", stderr))
 
     async def close(self, term_timeout=2.0):
         """Interrupts any I/O with the worker process and terminates the
