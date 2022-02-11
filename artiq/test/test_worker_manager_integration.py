@@ -119,7 +119,7 @@ async def test_worker_manager_connection(worker_manager_db, worker_manager_port)
 async def test_worker_manager_create_worker(worker_manager_db, worker_manager):
     transport = worker_manager_db.get_transport(worker_manager.id)
 
-    await wait_for(transport.create(logging.DEBUG, lambda: "test_worker"))
+    await wait_for(transport.create(logging.DEBUG))
 
     assert worker_manager._workers.keys() == {transport._id}
 

@@ -8,6 +8,7 @@ from sipyco import pyon
 from sipyco.logging_tools import LogParser
 
 from artiq.master.worker_transport import WorkerTransport
+from artiq.queue_tools import iterate_queue
 
 
 class WorkerManagerDB:
@@ -61,14 +62,14 @@ class WorkerManagerDB:
 
 
 class _ManagedWorkerState:
-    def __init__(self, log_source_cb):
+    def __init__(self):
         self.created = asyncio.get_event_loop().create_future()
         # If there's more than one item in this queue then that's quite
         # unexpected. It probably means that the `Worker` object and scheduling
         # machinery are getting quite behind.
         self.recv_queue = asyncio.Queue(10)
-        self.stdout_parser = LogParser(log_source_cb)
-        self.stderr_parser = LogParser(log_source_cb)
+        self.stdout_queue = asyncio.Queue(10)
+        self.stderr_queue = asyncio.Queue(10)
         self.closed = asyncio.get_event_loop().create_future()
 
 
@@ -120,15 +121,20 @@ class WorkerManagerProxy:
         self._writer.write(pyon.encode(obj).encode() + b"\n")
         await self._writer.drain()
 
-    async def create_worker(self, worker_id, log_level, log_source_cb):
-        self._workers[worker_id] = _ManagedWorkerState(log_source_cb)
+    async def create_worker(self, worker_id, log_level):
+        state = self._workers[worker_id] = _ManagedWorkerState()
         await self._send({
             "action": "create_worker",
             "worker_id": worker_id,
             "log_level": log_level,
         })
         await self._writer.drain()
-        await self._workers[worker_id].created
+        await state.created
+
+        return (
+            iterate_queue(state.stdout_queue),
+            iterate_queue(state.stderr_queue),
+        )
 
     async def worker_msg(self, worker_id, msg: str):
         await self._send({
@@ -155,8 +161,8 @@ class ManagedWorkerTransport(WorkerTransport):
         self._proxy = proxy
         self._id = id
 
-    async def create(self, log_level, log_source_cb):
-        return await self._proxy.create_worker(self._id, log_level, log_source_cb)
+    async def create(self, log_level):
+        return await self._proxy.create_worker(self._id, log_level)
 
     async def send(self, msg: str):
         return await self._proxy.worker_msg(self._id, msg)
