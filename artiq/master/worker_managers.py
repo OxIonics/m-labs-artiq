@@ -5,7 +5,6 @@ from typing import Dict
 import uuid
 
 from sipyco import pyon
-from sipyco.logging_tools import LogParser
 
 from artiq.master.worker_transport import WorkerTransport
 from artiq.queue_tools import iterate_queue
@@ -116,6 +115,11 @@ class WorkerManagerProxy:
                 pass
             else:
                 state.created.set_exception(RuntimeError())
+        elif action == "worker_msg":
+            # TODO what to do on a QueueFull.
+            state.recv_queue.put_nowait(obj["msg"])
+        else:
+            raise RuntimeError(f"Unexpected action {action}")
 
     async def _send(self, obj):
         self._writer.write(pyon.encode(obj).encode() + b"\n")

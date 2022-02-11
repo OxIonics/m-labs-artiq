@@ -1,17 +1,59 @@
 import asyncio
 from asyncio import iscoroutine
 from contextlib import AsyncExitStack
+from dataclasses import dataclass
 import logging
+from typing import AsyncIterable, Tuple
 
 import time
 import uuid
 
 import pytest
 
-from artiq.master.worker_managers import WorkerManagerDB
+from artiq.master.worker_managers import ManagedWorkerTransport, WorkerManagerDB
+from artiq.master.worker_transport import WorkerTransport
+from artiq.queue_tools import iterate_queue
 from artiq.worker_manager.worker_manager import WorkerManager
 
 BIND = "127.0.0.1"
+
+
+class FakeWorker:
+
+    def __init__(self):
+        self.received = []
+        self.closed = False
+        self.send_queue = asyncio.Queue()
+        self.stdout_queue = asyncio.Queue()
+        self.stderr_queue = asyncio.Queue()
+
+    def send(self, msg):
+        self.send_queue.put_nowait(msg)
+
+    async def assert_recv(self, msg):
+        assert len(self.received) > 0
+        assert self.received[-1] == msg
+
+
+class FakeWorkerTransport(WorkerTransport):
+
+    def __init__(self):
+        self.worker = FakeWorker()
+
+    async def create(self, log_level) -> Tuple[AsyncIterable, AsyncIterable]:
+        return (
+            iterate_queue(self.worker.stdout_queue),
+            iterate_queue(self.worker.stderr_queue)
+        )
+
+    async def send(self, msg: str):
+        self.worker.received.append(msg)
+
+    async def recv(self):
+        return await self.worker.send_queue.get()
+
+    async def close(self, term_timeout, rid):
+        self.closed = True
 
 
 @pytest.fixture()
@@ -19,6 +61,7 @@ async def worker_manager_db():
     async def handle_connection(reader, writer):
         await instance.handle_connection(reader, writer)
 
+    print("Making WorkerManagerDB")
     server = await asyncio.start_server(
         handle_connection,
         BIND,
@@ -41,6 +84,7 @@ async def worker_manager(worker_manager_db, worker_manager_port):
     async with AsyncExitStack() as exit:
         worker_manager = await WorkerManager.create(
             BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport
         )
         exit.push_async_callback(worker_manager.close)
         await wait_for(lambda: assert_num_connection(worker_manager_db))
@@ -48,7 +92,21 @@ async def worker_manager(worker_manager_db, worker_manager_port):
         yield worker_manager
 
 
-async def wait_for(check, *, timeout=1, period=0.01, exc=(AssertionError,)):
+@dataclass
+class WorkerPair:
+    master: ManagedWorkerTransport
+    worker: FakeWorker
+
+
+@pytest.fixture()
+async def worker_pair(worker_manager_db, worker_manager):
+    transport = worker_manager_db.get_transport(worker_manager.id)
+    await transport.create(logging.DEBUG)
+    worker: FakeWorkerTransport = worker_manager._workers[transport._id]
+    return WorkerPair(transport, worker.worker)
+
+
+async def wait_for(check, *args, timeout=1, period=0.01, exc=(AssertionError,)):
     """ Test utility to wait for an assertion to pass
 
     function:
@@ -71,15 +129,19 @@ async def wait_for(check, *, timeout=1, period=0.01, exc=(AssertionError,)):
     Returns:
         The return value of check if any.
     """
-    if iscoroutine(check):
-        async def check_wrapper():
-            return await asyncio.wait_for(
-                check,
-                timeout=max(deadline - time.time(), 0.01),
-            )
-    else:
-        async def check_wrapper():
-            return check()
+    async def check_wrapper():
+        if not iscoroutine(check):
+            value = check(*args)
+            if iscoroutine(value):
+                check_ = value
+            else:
+                return value
+        else:
+            check_ = check
+        return await asyncio.wait_for(
+            check_,
+            timeout=max(deadline - time.time(), 0.01),
+        )
 
     deadline = time.time() + timeout
     while time.time() < deadline:
@@ -104,9 +166,10 @@ async def test_worker_manager_connection(worker_manager_db, worker_manager_port)
     description = "Test workers"
 
     async with AsyncExitStack() as exit:
-        worker_manager = await WorkerManager.create(
+        print(f"Making WorkerManager connecting to {worker_manager_port}")
+        worker_manager = await wait_for(WorkerManager.create(
             BIND, worker_manager_port, manager_id, description,
-        )
+        ))
         exit.push_async_callback(worker_manager.close)
 
         await wait_for(lambda: assert_num_connection(worker_manager_db))
@@ -123,3 +186,20 @@ async def test_worker_manager_create_worker(worker_manager_db, worker_manager):
 
     assert worker_manager._workers.keys() == {transport._id}
 
+
+async def test_send_message_to_worker(worker_pair: WorkerPair):
+    msg = "Some message would normally be pyon"
+
+    await wait_for(worker_pair.master.send(msg))
+
+    await wait_for(worker_pair.worker.assert_recv, msg)
+
+
+async def test_send_message_from_worker(worker_pair: WorkerPair):
+    msg = "Some message would normally be pyon"
+
+    worker_pair.worker.send(msg)
+
+    actual = await wait_for(worker_pair.master.recv())
+
+    assert msg == actual
