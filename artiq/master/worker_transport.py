@@ -108,5 +108,4 @@ class PipeWorkerTransport(WorkerTransport):
         await self.ipc.drain()
 
     async def recv(self):
-        async with self.io_lock:
-            return await self.ipc.readline()
+        return await self.ipc.readline()
