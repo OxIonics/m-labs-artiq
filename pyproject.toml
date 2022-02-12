@@ -36,6 +36,7 @@ artiq_flash = "artiq.frontend.artiq_flash:main"
 aqctl_corelog = "artiq.frontend.aqctl_corelog:main"
 artiq_browser = "artiq.frontend.artiq_browser:main"
 artiq_dashboard = "artiq.frontend.artiq_dashboard:main"
+artiq_worker_manager = "artiq.frontend.artiq_worker_manager:main"
 
 [tool.poetry.dependencies]
 python = "~3.8"

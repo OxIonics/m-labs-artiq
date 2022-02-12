@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 from typing import Dict
 import uuid
 
@@ -8,6 +9,9 @@ from sipyco import pyon
 
 from artiq.master.worker_transport import WorkerTransport
 from artiq.queue_tools import iterate_queue
+
+
+log = logging.getLogger(__name__)
 
 
 class WorkerManagerDB:
@@ -46,9 +50,14 @@ class WorkerManagerDB:
                 f"Unexpected action {hello['action']}, expecting hello"
             )
 
-        self._worker_managers[hello["manager_id"]] = WorkerManagerProxy(
-            hello["manager_id"],
-            hello["manager_description"],
+        manager_id = hello["manager_id"]
+        description = hello["manager_description"]
+        log.info(
+            f"New worker manager connection id={manager_id} description={description}"
+        )
+        self._worker_managers[manager_id] = WorkerManagerProxy(
+            manager_id,
+            description,
             reader,
             writer,
         )
@@ -152,7 +161,7 @@ class WorkerManagerProxy:
 
     async def close_worker(self, worker_id, term_timeout, rid):
         await self._send({
-            "action": "worker_msg",
+            "action": "close_worker",
             "worker_id": worker_id,
         })
         await self._writer.drain()

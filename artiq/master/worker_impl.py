@@ -344,6 +344,7 @@ def main():
             obj = get_object()
             action = obj["action"]
             if action == "build":
+                logger.info("Got build command")
                 start_time = time.time()
                 rid = obj["rid"]
                 expid = obj["expid"]
@@ -366,6 +367,7 @@ def main():
                 os.chdir(dirname)
                 argument_mgr = ProcessArgumentManager(expid["arguments"])
                 exp_inst = exp((device_mgr, dataset_mgr, argument_mgr, {}))
+                logger.info("Completed build command")
                 put_completed()
             elif action == "prepare":
                 exp_inst.prepare()

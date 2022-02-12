@@ -69,6 +69,9 @@ def get_argparser():
                                  "(defaults to head, ignored without -R)")
     parser_add.add_argument("-c", "--class-name", default=None,
                             help="name of the class to run")
+    # TODO this isn't the -droids- interface I was looking
+    parser_add.add_argument("--worker-mgr-id",
+                            help="The worker manager id")
     parser_add.add_argument("file", metavar="FILE",
                             help="file containing the experiment to run")
     parser_add.add_argument("arguments", metavar="ARGUMENTS", nargs="*",
@@ -137,6 +140,7 @@ def _action_submit(remote, args):
         "file": args.file,
         "class_name": args.class_name,
         "arguments": arguments,
+        "worker_manager_id": args.worker_mgr_id,
     }
     if args.repository:
         expid["repo_rev"] = args.revision

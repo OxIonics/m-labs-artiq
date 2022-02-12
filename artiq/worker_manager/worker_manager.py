@@ -1,10 +1,16 @@
 import asyncio
 from collections import Callable
+import logging
 from typing import Dict
+import uuid
 
 from sipyco import pyon
+from sipyco.logging_tools import LogParser
 
 from artiq.master.worker_transport import PipeWorkerTransport, WorkerTransport
+
+
+log = logging.getLogger(__name__)
 
 
 class _WorkerState:
@@ -18,14 +24,18 @@ class WorkerManager:
 
     @classmethod
     async def create(
-            cls, host, port, worker_manager_id, description,
+            cls, host, port, manager_id, description,
             transport_factory=PipeWorkerTransport,
     ) -> "WorkerManager":
+        if manager_id is None:
+            manager_id = str(uuid.uuid4())
+        logging.info(f"Connecting to {host}:{port} with id {manager_id}")
         reader, writer = await asyncio.open_connection(host, port)
         instance = cls(
-            worker_manager_id, description, reader, writer,
+            manager_id, description, reader, writer,
             transport_factory,
         )
+        logging.info(f"Connected, starting processors and sending hello")
         instance.start()
         await instance.send_hello()
         return instance
@@ -70,16 +80,21 @@ class WorkerManager:
 
     async def _handle_msg(self, line):
         obj = pyon.decode(line.decode())
-        action = obj["action"]
-        if action == "create_worker":
-            await self._create_worker(obj)
-        elif action == "worker_msg":
-            worker_id = obj["worker_id"]
-            worker = self._workers[worker_id]
-            await worker.send(obj["msg"])
-        else:
-            # TODO signal error to master
-            raise RuntimeError(f"Unknown action {action}")
+        try:
+            action = obj["action"]
+            if action == "create_worker":
+                await self._create_worker(obj)
+            elif action == "worker_msg":
+                log.info(f"Forwarding worker_msg '{obj['msg']}'")
+                worker_id = obj["worker_id"]
+                worker = self._workers[worker_id]
+                await worker.send(obj["msg"])
+            else:
+                # TODO signal error to master
+                raise RuntimeError(f"Unknown action {action}")
+        except KeyError as ex:
+            log.error(f"Missing key {ex} in msg {obj!r}", exc_info=True)
+            # TODO reraise and signal failure to master
 
     async def _process_worker_msgs(self, worker_id, transport: WorkerTransport):
         while True:
@@ -93,6 +108,27 @@ class WorkerManager:
                 "msg": msg,
             })
 
+    async def _process_worker_output(self, worker_id, forward_action, output):
+        log_parser = LogParser(lambda: worker_id)
+        async for entry in output:
+            if not entry:
+                break
+            try:
+                log_parser.line_input(entry.decode().rstrip("\r\n"))
+            except:
+                log.info("exception in log forwarding", exc_info=True)
+                break
+            # TODO:
+            # await self._send({
+            #     "action": forward_action,
+            #     "worker_id": worker_id,
+            #     "data": entry,
+            # })
+        log.info(
+            "stopped log forwarding of stream %s of %s",
+            forward_action, worker_id
+        )
+
     async def _create_worker(self, obj):
         worker_id = obj["worker_id"]
         print(f"Creating worker {worker_id}")
@@ -100,7 +136,8 @@ class WorkerManager:
         (stdout, stderr) = await worker.create(obj["log_level"])
 
         asyncio.create_task(self._process_worker_msgs(worker_id, worker))
-        # TODO: start task to forward stdout and stderr
+        asyncio.create_task(self._process_worker_output(worker_id, "worker_stdout", stdout))
+        asyncio.create_task(self._process_worker_output(worker_id, "worker_stderr", stderr))
 
         self._workers[worker_id] = worker
         await self._send({
