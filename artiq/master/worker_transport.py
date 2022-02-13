@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 import subprocess
-from typing import AsyncIterable, Tuple
+from typing import AsyncIterator, Tuple
 
 import sys
 
@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 class WorkerTransport:
 
-    async def create(self, log_level) -> Tuple[AsyncIterable, AsyncIterable]:
+    async def create(self, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
         raise NotImplementedError()
 
     async def send(self, msg: str):
@@ -26,14 +26,22 @@ class WorkerTransport:
         raise NotImplementedError()
 
 
+async def _decode_iter(input: AsyncIterator[bytes]) -> AsyncIterator[str]:
+    async for line in input:
+        yield line.decode()
+
+
 class PipeWorkerTransport(WorkerTransport):
 
     def __init__(self):
         self.io_lock = asyncio.Lock()
         self.ipc = None
 
-    async def create(self, log_level):
+    async def create(self, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
         if self.ipc is not None:
+            # TODO: Need to avoid this really, I'm not sure that this is
+            #   reachable even now. But we need to detect this condition in
+            #   Worker and not call create if we're reusing.
             return  # process already exists, recycle
         async with self.io_lock:
             self.ipc = pipe_ipc.AsyncioParentComm()
@@ -45,8 +53,8 @@ class PipeWorkerTransport(WorkerTransport):
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=env, start_new_session=True)
             return (
-                self.ipc.process.stdout,
-                self.ipc.process.stderr,
+                _decode_iter(self.ipc.process.stdout),
+                _decode_iter(self.ipc.process.stderr),
             )
 
     async def close(self, term_timeout, rid):

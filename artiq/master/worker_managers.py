@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Dict
+from typing import AsyncIterator, Dict, Tuple
 import uuid
 
 from sipyco import pyon
@@ -103,6 +103,9 @@ class WorkerManagerProxy:
     async def _run(self):
         while True:
             line = await self._reader.readline()
+            if not line:
+                # TODO signal worker manager exit
+                break
             obj = pyon.decode(line.decode())
             action = obj["action"]
 
@@ -127,6 +130,12 @@ class WorkerManagerProxy:
         elif action == "worker_msg":
             # TODO what to do on a QueueFull.
             state.recv_queue.put_nowait(obj["msg"])
+        elif action == "worker_stdout":
+            # TODO what to do on a QueueFull.
+            state.stdout_queue.put_nowait(obj["data"])
+        elif action == "worker_stderr":
+            # TODO what to do on a QueueFull.
+            state.stderr_queue.put_nowait(obj["data"])
         else:
             raise RuntimeError(f"Unexpected action {action}")
 
@@ -134,7 +143,9 @@ class WorkerManagerProxy:
         self._writer.write(pyon.encode(obj).encode() + b"\n")
         await self._writer.drain()
 
-    async def create_worker(self, worker_id, log_level):
+    async def create_worker(
+            self, worker_id, log_level
+    ) -> Tuple[AsyncIterator, AsyncIterator]:
         state = self._workers[worker_id] = _ManagedWorkerState()
         await self._send({
             "action": "create_worker",
@@ -174,7 +185,7 @@ class ManagedWorkerTransport(WorkerTransport):
         self._proxy = proxy
         self._id = id
 
-    async def create(self, log_level):
+    async def create(self, log_level) -> Tuple[AsyncIterator, AsyncIterator]:
         return await self._proxy.create_worker(self._id, log_level)
 
     async def send(self, msg: str):

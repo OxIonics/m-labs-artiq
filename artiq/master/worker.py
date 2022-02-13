@@ -1,9 +1,10 @@
-import sys
-import os
 import asyncio
+from enum import Enum, unique
 import logging
+import os
+import sys
 import time
-from typing import AsyncIterable
+from typing import AsyncIterator
 
 from sipyco import pyon
 from sipyco.logging_tools import LogParser
@@ -11,8 +12,6 @@ from sipyco.packed_exceptions import current_exc_packed
 
 from artiq.master.worker_transport import PipeWorkerTransport, WorkerTransport
 from artiq.tools import asyncio_wait_or_cancel
-from enum import Enum, unique
-
 
 logger = logging.getLogger(__name__)
 
@@ -58,15 +57,15 @@ def log_worker_exception():
         logger.error("worker exception details", exc_info=True)
 
 
-async def _iterate_logs(source_cb, stream_name, log_lines: AsyncIterable[bytes]):
+async def _iterate_logs(source_cb, stream_name, log_lines: AsyncIterator[str]):
     # Heavily inspired by sipyco.logging_tools.LogParser.stream_task but this
-    # will work with any AsyncIterable not just StreamReaders
+    # will work with any AsyncIterator not just StreamReaders
     log_parser = LogParser(source_cb)
     async for entry in log_lines:
         try:
             if not entry:
                 break
-            log_parser.line_input(entry.decode().rstrip("\r\n"))
+            log_parser.line_input(entry.rstrip("\r\n"))
         except:
             logger.debug("exception in log forwarding", exc_info=True)
             break

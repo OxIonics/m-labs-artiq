@@ -1,7 +1,7 @@
 import asyncio
 from collections import Callable
 import logging
-from typing import Dict
+from typing import AsyncIterator, Dict
 import uuid
 
 from sipyco import pyon
@@ -108,26 +108,36 @@ class WorkerManager:
                 "msg": msg,
             })
 
-    async def _process_worker_output(self, worker_id, forward_action, output):
+    async def _process_worker_output(
+            self,
+            worker_id: str,
+            forward_action: str,
+            output: AsyncIterator[str],
+    ):
         log_parser = LogParser(lambda: worker_id)
         async for entry in output:
             if not entry:
                 break
+            entry = entry.rstrip("\r\n")
             try:
-                log_parser.line_input(entry.decode().rstrip("\r\n"))
+                log_parser.line_input(entry)
             except:
                 log.info("exception in log forwarding", exc_info=True)
                 break
-            # TODO:
-            # await self._send({
-            #     "action": forward_action,
-            #     "worker_id": worker_id,
-            #     "data": entry,
-            # })
+            await self._send({
+                "action": forward_action,
+                "worker_id": worker_id,
+                "data": entry,
+            })
         log.info(
             "stopped log forwarding of stream %s of %s",
             forward_action, worker_id
         )
+        await self._send({
+            "action": forward_action,
+            "worker_id": worker_id,
+            "data": "",
+        })
 
     async def _create_worker(self, obj):
         worker_id = obj["worker_id"]
