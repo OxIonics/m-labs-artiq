@@ -27,6 +27,10 @@ def main():
         help="This process will exit when the number of workers drops to zero"
     )
     parser.add_argument(
+        "-v", "--verbose", default=0, action="count",
+        help="increase logging level. -v for info -vv for debug",
+    )
+    parser.add_argument(
         "description",
         help="The human readable description for the worker manager"
     )
@@ -36,7 +40,10 @@ def main():
     )
     args = parser.parse_args()
 
-    logging.basicConfig(level=logging.INFO)
+    logging.basicConfig(
+        level=logging.WARNING - args.verbose * 10,
+        format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
+    )
 
     loop = asyncio.get_event_loop()
     mgr = loop.run_until_complete(WorkerManager.create(

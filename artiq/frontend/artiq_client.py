@@ -145,11 +145,14 @@ def _action_submit(remote, args):
     worker_manager = None
     if args.start_worker_mgr:
         worker_manager_id = str(uuid.uuid4())
-        worker_manager = subprocess.Popen(
-            [sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
-             "--id", worker_manager_id, "--exit-on-idle",
-             socket.gethostname(), args.server]
-        )
+        cmd = [
+            sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
+            "--id", worker_manager_id, "--exit-on-idle",
+            socket.gethostname(), args.server,
+        ]
+        if args.verbose:
+            cmd.append("-" + "v" * args.verbose)
+        worker_manager = subprocess.Popen(cmd)
         # TODO wait for worker manager to be connected in some more reliable way
         time.sleep(0.5)
     elif args.worker_mgr_id:
