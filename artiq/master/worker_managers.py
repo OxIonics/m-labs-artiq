@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import AsyncIterator, Dict, Tuple
+from typing import AsyncIterator, Callable, Dict, Tuple
 import uuid
 
 from sipyco import pyon
@@ -60,6 +60,7 @@ class WorkerManagerDB:
             description,
             reader,
             writer,
+            lambda: self._worker_managers.pop(manager_id, None)
         )
 
     def get_transport(self, worker_manager_id):
@@ -116,13 +117,14 @@ class WorkerManagerProxy:
         "worker_error",
     }
 
-    def __init__(self, id_, description, reader, writer):
+    def __init__(self, id_, description, reader, writer, detach):
         self._id = id_
         self._description = description
         self._reader: asyncio.StreamReader = reader
         self._writer: asyncio.StreamWriter = writer
         self._run_task = asyncio.create_task(self._run())
         self._workers: Dict[str, _ManagedWorkerState] = {}
+        self._detach: Callable[[], None] = detach
 
     async def _run(self):
         try:
@@ -149,6 +151,7 @@ class WorkerManagerProxy:
             await self._close()
 
     async def _close(self):
+        self._detach()
         workers = list(self._workers.values())
         self._workers.clear()
         if workers:
