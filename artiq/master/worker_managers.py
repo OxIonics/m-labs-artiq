@@ -125,18 +125,45 @@ class WorkerManagerProxy:
         self._workers: Dict[str, _ManagedWorkerState] = {}
 
     async def _run(self):
-        while True:
-            line = await self._reader.readline()
-            if not line:
-                # TODO signal worker manager exit
-                break
-            obj = pyon.decode(line.decode())
-            action = obj["action"]
+        try:
+            while True:
+                line = await self._reader.readline()
+                if not line:
+                    break
+                obj = pyon.decode(line.decode())
+                action = obj["action"]
 
-            if action in self.worker_messages:
-                self._worker_action(obj)
-            else:
-                raise RuntimeError(f"Unexpected action {action}")
+                if action in self.worker_messages:
+                    self._worker_action(obj)
+                else:
+                    raise RuntimeError(f"Unexpected action {action}")
+        except asyncio.CancelledError:
+            pass
+        except:
+            log.error(
+                "Unhandled exception in handling message from worker manager",
+                exc_info=True
+            )
+        finally:
+            log.info(f"Shutting down worker manager {self._id}")
+            await self._close()
+
+    async def _close(self):
+        workers = list(self._workers.values())
+        self._workers.clear()
+        if workers:
+            (_, pending) = await asyncio.wait(
+                [worker.recv_queue.put("") for worker in workers] +
+                [worker.stdout_queue.put("") for worker in workers] +
+                [worker.stderr_queue.put("") for worker in workers],
+                timeout=0.5,
+                )
+            if pending:
+                log.warning(
+                    f"Failed to put end sentinels in {len(pending)} worker queues"
+                )
+        self._writer.close()
+        await self._writer.wait_closed()
 
     def _worker_action(self, obj):
         action = obj["action"]
@@ -157,10 +184,6 @@ class WorkerManagerProxy:
             try:
                 state.recv_queue.put_nowait(obj["msg"])
             except asyncio.QueueFull:
-                log.error(
-                    "Receive queue full. The master must be running behind"
-                )
-                # TODO we need to handle this to shutdown this worker.
                 raise RuntimeError(
                     "Receive queue full. The master must be running behind"
                 )
@@ -210,9 +233,22 @@ class WorkerManagerProxy:
         })
 
     async def worker_recv(self, worker_id):
-        return await self._workers[worker_id].recv_queue.get()
+        try:
+            return await self._workers[worker_id].recv_queue.get()
+        except KeyError:
+            # If there's no worker here the worker has either been removed
+            # because it was closed or the proxy has shutdown its connection
+            # to the worker manager.
+            log.debug(f"No worker known by id {worker_id} in worker_recv")
+            return ""
 
     async def close_worker(self, worker_id, term_timeout, rid):
+        if worker_id not in self._workers:
+            log.debug(
+                f"Ignoring close request for unknown worker {worker_id}. "
+                "Probably never created or already closed"
+            )
+            return
         await self._send({
             "action": "close_worker",
             "worker_id": worker_id,
@@ -223,16 +259,11 @@ class WorkerManagerProxy:
         await self._workers[worker_id].closed
 
     async def close(self):
-        # TODO should we tell the worker manager to shutdown
-        #   This'll become a thing in both directions if we want to support
-        #   reconnection
         self._run_task.cancel()
         try:
             await self._run_task
         except asyncio.CancelledError:
             pass
-        self._writer.close()
-        await self._writer.wait_closed()
 
 
 class ManagedWorkerTransport(WorkerTransport):
