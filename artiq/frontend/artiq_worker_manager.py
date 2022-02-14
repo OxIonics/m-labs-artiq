@@ -33,13 +33,18 @@ def main():
     logging.basicConfig(level=logging.INFO)
 
     loop = asyncio.get_event_loop()
-    loop.run_until_complete(WorkerManager.create(
+    mgr = loop.run_until_complete(WorkerManager.create(
         args.master,
         args.port,
         args.id,
         args.description,
     ))
-    loop.run_forever()
+    try:
+        loop.run_forever()
+    except KeyboardInterrupt:
+        logging.info("Exiting")
+    finally:
+        loop.run_until_complete(mgr.close())
 
 
 if __name__ == '__main__':

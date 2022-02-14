@@ -1,7 +1,6 @@
 import asyncio
-from collections import Callable
 import logging
-from typing import AsyncIterator, Dict
+from typing import AsyncIterator, Dict, Callable, Optional
 import uuid
 
 from sipyco import pyon
@@ -15,9 +14,11 @@ log = logging.getLogger(__name__)
 
 class _WorkerState:
 
-    def __init__(self, transport, msg_task):
+    def __init__(self, transport, msg_task, stdout_task, stderr_task):
         self.transport: WorkerTransport = transport
         self.msg_task = msg_task
+        self.stdout_task = stdout_task
+        self.stderr_task = stderr_task
 
 
 class WorkerManager:
@@ -49,8 +50,8 @@ class WorkerManager:
         self._reader: asyncio.StreamReader = reader
         self._writer: asyncio.StreamWriter = writer
         self._transport_factory: Callable[[], WorkerTransport] = transport_factory
-        self._task = None
-        self._workers: Dict[str, WorkerTransport] = {}
+        self._task: Optional[asyncio.Task] = None
+        self._workers: Dict[str, _WorkerState] = {}
         self._new_worker = asyncio.Queue(10)
 
     @property
@@ -85,10 +86,18 @@ class WorkerManager:
             if action == "create_worker":
                 await self._create_worker(obj)
             elif action == "worker_msg":
-                log.info(f"Forwarding worker_msg '{obj['msg']}'")
                 worker_id = obj["worker_id"]
                 worker = self._workers[worker_id]
-                await worker.send(obj["msg"])
+                await worker.transport.send(obj["msg"])
+            elif action == "close_worker":
+                worker_id = obj["worker_id"]
+                log.info(f"Closing worker {worker_id}")
+                worker = self._workers.pop(worker_id)
+                await self._close_worker(worker, obj["term_timeout"], obj["rid"])
+                await self._send({
+                    "action": "worker_exited",
+                    "worker_id": worker_id,
+                })
             else:
                 # TODO signal error to master
                 raise RuntimeError(f"Unknown action {action}")
@@ -141,20 +150,49 @@ class WorkerManager:
 
     async def _create_worker(self, obj):
         worker_id = obj["worker_id"]
-        print(f"Creating worker {worker_id}")
+        log.info(f"Creating worker {worker_id}")
         worker = self._transport_factory()
         (stdout, stderr) = await worker.create(obj["log_level"])
 
-        asyncio.create_task(self._process_worker_msgs(worker_id, worker))
-        asyncio.create_task(self._process_worker_output(worker_id, "worker_stdout", stdout))
-        asyncio.create_task(self._process_worker_output(worker_id, "worker_stderr", stderr))
+        msg_task = asyncio.create_task(self._process_worker_msgs(worker_id, worker))
+        stdout_task = asyncio.create_task(self._process_worker_output(worker_id, "worker_stdout", stdout))
+        stderr_task = asyncio.create_task(self._process_worker_output(worker_id, "worker_stderr", stderr))
 
-        self._workers[worker_id] = worker
+        self._workers[worker_id] = _WorkerState(
+            worker, msg_task, stdout_task, stderr_task
+        )
         await self._send({
             "action": "worker_created",
             "worker_id": worker_id
         })
 
+    async def _close_worker(self, worker, term_timeout=30, rid="shutdown"):
+        await worker.transport.close(term_timeout, rid)
+        (_, pending) = await asyncio.wait(
+            [worker.msg_task, worker.stdout_task, worker.stderr_task],
+            return_when=asyncio.ALL_COMPLETED,
+            timeout=0.5,
+        )
+        if worker.msg_task in pending:
+            log.warning("Msg task didn't exit")
+        if worker.stdout_task in pending:
+            log.warning("Stdout task didn't exit")
+        if worker.stderr_task in pending:
+            log.warning("Stderr task didn't exit")
+
     async def close(self):
+        await asyncio.gather(*[
+            self._close_worker(worker)
+            for worker in self._workers.values()
+        ])
+        self._workers.clear()
+        # TODO: Do we need to do any signalling to the master here.
         self._writer.close()
         await self._writer.wait_closed()
+        self._task.cancel()
+        try:
+            await asyncio.wait_for(self._task, timeout=0.5)
+        except asyncio.CancelledError:
+            pass
+        except asyncio.TimeoutError:
+            log.warning("Timedout waiting for main task to exit")

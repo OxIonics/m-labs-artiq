@@ -136,8 +136,11 @@ class WorkerManagerProxy:
         elif action == "worker_stderr":
             # TODO what to do on a QueueFull.
             state.stderr_queue.put_nowait(obj["data"])
+        elif action == "worker_exited":
+            state.closed.set_result(None)
+            del self._workers[worker_id]
         else:
-            raise RuntimeError(f"Unexpected action {action}")
+            raise RuntimeError(f"Unexpected worker action {action}")
 
     async def _send(self, obj):
         self._writer.write(pyon.encode(obj).encode() + b"\n")
@@ -174,6 +177,8 @@ class WorkerManagerProxy:
         await self._send({
             "action": "close_worker",
             "worker_id": worker_id,
+            "term_timeout": term_timeout,
+            "rid": rid,
         })
         await self._writer.drain()
         await self._workers[worker_id].closed

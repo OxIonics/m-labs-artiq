@@ -73,7 +73,10 @@ class FakeWorkerTransport(WorkerTransport):
         return await self.worker.send_queue.get()
 
     async def close(self, term_timeout, rid):
-        self.closed = True
+        self.worker.closed = True
+        self.worker.send_queue.put_nowait("")
+        self.worker.stdout_queue.put_nowait(None)
+        self.worker.stderr_queue.put_nowait(None)
 
 
 @pytest.fixture()
@@ -124,8 +127,8 @@ class WorkerPair:
 async def worker_pair(worker_manager_db, worker_manager):
     transport = worker_manager_db.get_transport(worker_manager.id)
     (stdout, stderr) = await transport.create(logging.DEBUG)
-    worker = cast(FakeWorkerTransport, worker_manager._workers[transport._id])
-    return WorkerPair(transport, worker.worker, stdout, stderr)
+    worker = worker_manager._workers[transport._id].transport.worker
+    return WorkerPair(transport, worker, stdout, stderr)
 
 
 async def wait_for(check, *args, timeout=1, period=0.01, exc=(AssertionError,)):
@@ -245,3 +248,10 @@ async def test_forward_stderr_from_worker_to_master(worker_pair: WorkerPair):
     actual = await wait_for(anext(worker_pair.forwarded_stderr))
 
     assert stderr == actual
+
+
+async def test_closing_worker(worker_pair: WorkerPair):
+
+    await wait_for(worker_pair.master.close(1, 10))
+
+    assert worker_pair.worker.closed
