@@ -96,8 +96,12 @@ class _ManagedWorkerState:
         # unexpected. It probably means that the `Worker` object and scheduling
         # machinery are getting quite behind.
         self.recv_queue = asyncio.Queue(10)
-        self.stdout_queue = asyncio.Queue(10)
-        self.stderr_queue = asyncio.Queue(10)
+        # These need to be bigger because sometimes we get large multiline log
+        # message like stack traces. It's nice not to await in the message
+        # handling code so we don't to worry that we might block when we have a
+        # waiting message.
+        self.stdout_queue = asyncio.Queue(100)
+        self.stderr_queue = asyncio.Queue(100)
         self.closed = asyncio.get_event_loop().create_future()
 
 
@@ -108,7 +112,7 @@ class WorkerManagerProxy:
         "worker_msg",
         "worker_stdout",
         "worker_stderr",
-        "worker_exited",
+        "worker_closed",
         "worker_error",
     }
 
@@ -143,22 +147,36 @@ class WorkerManagerProxy:
             state.created.set_result(None)
             log.debug(f"Worker {worker_id} created")
         elif action == "worker_error":
-            if state.created.done():
-                # TODO probably signal an error through the recv queue
-                pass
-            else:
-                state.created.set_exception(RuntimeError())
+            log.error(f"Worker {worker_id} error: {obj['msg']}")
+            if not state.created.done():
+                state.created.set_exception(RuntimeError(
+                    "Worker failed during create"
+                ))
+            state.recv_queue.put_nowait("")
         elif action == "worker_msg":
-            # TODO what to do on a QueueFull.
-            state.recv_queue.put_nowait(obj["msg"])
+            try:
+                state.recv_queue.put_nowait(obj["msg"])
+            except asyncio.QueueFull:
+                log.error(
+                    "Receive queue full. The master must be running behind"
+                )
+                # TODO we need to handle this to shutdown this worker.
+                raise RuntimeError(
+                    "Receive queue full. The master must be running behind"
+                )
         elif action == "worker_stdout":
-            # TODO what to do on a QueueFull.
-            state.stdout_queue.put_nowait(obj["data"])
+            try:
+                state.stdout_queue.put_nowait(obj["data"])
+            except asyncio.QueueFull:
+                log.warning("Dropping worker stdout line")
         elif action == "worker_stderr":
-            # TODO what to do on a QueueFull.
-            state.stderr_queue.put_nowait(obj["data"])
-        elif action == "worker_exited":
+            try:
+                state.stderr_queue.put_nowait(obj["data"])
+            except asyncio.QueueFull:
+                log.warning("Dropping worker stderr line")
+        elif action == "worker_closed":
             state.closed.set_result(None)
+            state.recv_queue.put_nowait("")
             del self._workers[worker_id]
         else:
             raise RuntimeError(f"Unexpected worker action {action}")

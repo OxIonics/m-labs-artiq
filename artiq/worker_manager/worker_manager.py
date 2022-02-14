@@ -100,7 +100,7 @@ class WorkerManager:
                 worker = self._workers.pop(worker_id)
                 await self._close_worker(worker, obj["term_timeout"], obj["rid"])
                 await self._send({
-                    "action": "worker_exited",
+                    "action": "worker_closed",
                     "worker_id": worker_id,
                 })
                 if self._exit_on_idle and len(self._workers) == 0:
@@ -116,13 +116,24 @@ class WorkerManager:
         while True:
             msg = await transport.recv()
             if not msg:
-                # TODO signal worker exit
                 break
             await self._send({
                 "action": "worker_msg",
                 "worker_id": worker_id,
                 "msg": msg,
             })
+
+        if worker_id in self._workers:
+            log.warning(f"Worker {worker_id} exited unexpectedly")
+            await self._send({
+                "action": "worker_error",
+                "worker_id": worker_id,
+                "msg": "Worker exited unexpectedly"
+            })
+        else:
+            log.info(f"Worker {worker_id} exited")
+        # TODO do we get a close worker message from the master
+        #  based on the fact that Worker._recv doesn't do any clean up then yes
 
     async def _process_worker_output(
             self,
@@ -168,6 +179,7 @@ class WorkerManager:
         self._workers[worker_id] = _WorkerState(
             worker, msg_task, stdout_task, stderr_task
         )
+        log.info(f"Created worker {worker_id}")
         await self._send({
             "action": "worker_created",
             "worker_id": worker_id
@@ -188,12 +200,14 @@ class WorkerManager:
             log.warning("Stderr task didn't exit")
 
     async def close(self):
+        log.info("Closing worker manager")
+        workers = list(self._workers.values())
+        self._workers.clear()
         await asyncio.gather(*[
             self._close_worker(worker)
-            for worker in self._workers.values()
+            for worker in workers
         ])
-        self._workers.clear()
-        # TODO: Do we need to do any signalling to the master here.
+
         self._writer.close()
         await self._writer.wait_closed()
         self._task.cancel()

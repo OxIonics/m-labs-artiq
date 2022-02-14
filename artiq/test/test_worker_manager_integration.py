@@ -54,6 +54,9 @@ class FakeWorker:
         assert len(self.received) > 0
         assert self.received[-1] == msg
 
+    def close_unexpectedly(self):
+        self.send_queue.put_nowait("")
+
 
 class FakeWorkerTransport(WorkerTransport):
 
@@ -255,3 +258,12 @@ async def test_closing_worker(worker_pair: WorkerPair):
     await wait_for(worker_pair.master.close(1, 10))
 
     assert worker_pair.worker.closed
+
+
+async def test_worker_closing_unexpectedly_forwarded(worker_pair: WorkerPair):
+
+    worker_pair.worker.close_unexpectedly()
+
+    actual = await wait_for(worker_pair.master.recv())
+
+    assert actual == ""
