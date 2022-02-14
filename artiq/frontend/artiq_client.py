@@ -73,12 +73,23 @@ def get_argparser():
                                  "(defaults to head, ignored without -R)")
     parser_add.add_argument("-c", "--class-name", default=None,
                             help="name of the class to run")
-    parser_add.add_argument("--start-worker-mgr", default=False,
-                            action="store_true",
-                            help="Start a local worker manager and use that to "
-                                 "run the experiment")
-    parser_add.add_argument("--worker-mgr-id",
-                            help="The worker manager id")
+    worker_mgr = parser_add.add_argument_group(
+        "Worker Manager",
+        "Optionally use a worker manager to run the experiment. If none of these "
+        "options are specified then the experiment will be executed by the master "
+        "and the experiment file must be readable by the master."
+    ).add_mutually_exclusive_group()
+    worker_mgr.add_argument(
+        "--start-worker-mgr", default=False,
+        action="store_true",
+        help="Start a local worker manager and use that to run the experiment. "
+             "The experiment file can be any path readable from the current "
+             "working directory"
+    )
+    worker_mgr.add_argument(
+        "--worker-mgr-id",
+        help="The id of an existing worker manager to use to run the experiment"
+    )
     parser_add.add_argument("file", metavar="FILE",
                             help="file containing the experiment to run")
     parser_add.add_argument("arguments", metavar="ARGUMENTS", nargs="*",

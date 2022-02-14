@@ -8,12 +8,13 @@ from artiq.worker_manager.worker_manager import WorkerManager
 def main():
     parser = argparse.ArgumentParser(
         "Runs a \"worker manager\", which allows the artiq master to run "
-        "experiment code here rather than in it's own environment."
+        "experiment code here rather than in its own environment."
     )
     parser.add_argument(
         "--id",
         help="A globally unique id for the worker manager. The default is to "
-             "generate a new uuid4."
+             "generate a new uuid4. This is normally used by other applications "
+             "so that they know the id of the worker manager to use it."
     )
     parser.add_argument(
         "--port",
