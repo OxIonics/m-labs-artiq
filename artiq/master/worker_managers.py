@@ -63,9 +63,15 @@ class WorkerManagerDB:
         )
 
     def get_transport(self, worker_manager_id):
+        try:
+            proxy = self._worker_managers[worker_manager_id]
+        except KeyError:
+            raise ValueError(f"Unknown worker_manager_id {worker_manager_id}")
+        id_ = str(uuid.uuid4())
+        log.debug(f"New worker transport {id_} in manager {worker_manager_id}")
         return ManagedWorkerTransport(
-            self._worker_managers[worker_manager_id],
-            str(uuid.uuid4()),
+            proxy,
+            id_,
         )
 
     async def close(self):
@@ -135,6 +141,7 @@ class WorkerManagerProxy:
 
         if action == "worker_created":
             state.created.set_result(None)
+            log.debug(f"Worker {worker_id} created")
         elif action == "worker_error":
             if state.created.done():
                 # TODO probably signal an error through the recv queue

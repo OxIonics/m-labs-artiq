@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import asyncio
 import logging
 from typing import AsyncIterator, Dict, Callable, Optional
@@ -27,14 +29,15 @@ class WorkerManager:
     async def create(
             cls, host, port, manager_id, description,
             transport_factory=PipeWorkerTransport,
-    ) -> "WorkerManager":
+            **kwargs
+    ) -> WorkerManager:
         if manager_id is None:
             manager_id = str(uuid.uuid4())
         logging.info(f"Connecting to {host}:{port} with id {manager_id}")
         reader, writer = await asyncio.open_connection(host, port)
         instance = cls(
             manager_id, description, reader, writer,
-            transport_factory,
+            transport_factory, **kwargs,
         )
         logging.info(f"Connected, starting processors and sending hello")
         instance.start()
@@ -43,7 +46,7 @@ class WorkerManager:
 
     def __init__(
             self, worker_manager_id, description, reader, writer,
-            transport_factory,
+            transport_factory, *, exit_on_idle=False,
     ):
         self._id = worker_manager_id
         self._description = description
@@ -53,6 +56,8 @@ class WorkerManager:
         self._task: Optional[asyncio.Task] = None
         self._workers: Dict[str, _WorkerState] = {}
         self._new_worker = asyncio.Queue(10)
+        self._exit_on_idle = exit_on_idle
+        self.stop_request = asyncio.Event()
 
     @property
     def id(self):
@@ -98,6 +103,8 @@ class WorkerManager:
                     "action": "worker_exited",
                     "worker_id": worker_id,
                 })
+                if self._exit_on_idle and len(self._workers) == 0:
+                    self.stop_request.set()
             else:
                 # TODO signal error to master
                 raise RuntimeError(f"Unknown action {action}")

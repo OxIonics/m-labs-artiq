@@ -21,6 +21,12 @@ def main():
         default=3252,
     )
     parser.add_argument(
+        "--exit-on-idle",
+        default=False,
+        action="store_true",
+        help="This process will exit when the number of workers drops to zero"
+    )
+    parser.add_argument(
         "description",
         help="The human readable description for the worker manager"
     )
@@ -38,9 +44,10 @@ def main():
         args.port,
         args.id,
         args.description,
+        exit_on_idle=args.exit_on_idle,
     ))
     try:
-        loop.run_forever()
+        loop.run_until_complete(mgr.stop_request.wait())
     except KeyboardInterrupt:
         logging.info("Exiting")
     finally:
