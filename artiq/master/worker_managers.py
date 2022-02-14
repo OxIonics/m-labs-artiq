@@ -68,6 +68,20 @@ class WorkerManagerDB:
             str(uuid.uuid4()),
         )
 
+    async def close(self):
+        self._server.close()
+        await self._server.wait_closed()
+
+        # We could use `gather` or `wait` here.
+        # With `gather` we have to spread the arguments, but the first exception
+        # is propagated.
+        # `wait` accepts an iterable, but we'd have to checks for exceptions
+        # manually.
+        await asyncio.gather(*[
+            proxy.close()
+            for proxy in self._worker_managers.values()
+        ])
+
 
 class _ManagedWorkerState:
     def __init__(self):
@@ -182,6 +196,18 @@ class WorkerManagerProxy:
         })
         await self._writer.drain()
         await self._workers[worker_id].closed
+
+    async def close(self):
+        # TODO should we tell the worker manager to shutdown
+        #   This'll become a thing in both directions if we want to support
+        #   reconnection
+        self._run_task.cancel()
+        try:
+            await self._run_task
+        except asyncio.CancelledError:
+            pass
+        self._writer.close()
+        await self._writer.wait_closed()
 
 
 class ManagedWorkerTransport(WorkerTransport):

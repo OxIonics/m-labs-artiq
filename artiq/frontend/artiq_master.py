@@ -107,6 +107,7 @@ def main():
     worker_manager_db = loop.run_until_complete(
         WorkerManagerDB.create(bind, args.port_worker_manager)
     )
+    atexit_register_coroutine(worker_manager_db.close)
 
     if args.git:
         repo_backend = GitBackend(args.repository)
