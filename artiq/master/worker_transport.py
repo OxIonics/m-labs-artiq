@@ -52,6 +52,7 @@ class PipeWorkerTransport(WorkerTransport):
                 self.ipc.get_address(), str(log_level),
                 stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 env=env, start_new_session=True)
+            logger.debug(f"Created worker process pid={self.ipc.process.pid}")
             return (
                 _decode_iter(self.ipc.process.stdout),
                 _decode_iter(self.ipc.process.stderr),
