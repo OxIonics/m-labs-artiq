@@ -40,7 +40,7 @@ def init_log(args):
     handlers = []
     console_handler = logging.StreamHandler()
     console_handler.setFormatter(logging.Formatter(
-        "%(levelname)s:%(source)s:%(name)s:%(message)s"))
+        "%(asctime)s %(levelname)s:%(source)s:%(name)s:%(message)s"))
     handlers.append(console_handler)
 
     if args.log_file:
