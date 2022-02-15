@@ -87,6 +87,7 @@ class Worker:
         self.filename = None
         self.watchdogs = dict()  # wid -> expiration (using time.monotonic)
 
+        self._created = False
         self.closed = asyncio.Event()
 
     def create_watchdog(self, t):
@@ -114,8 +115,11 @@ class Worker:
     async def _create_process(self, log_level):
         if self.closed.is_set():
             raise WorkerError("Attempting to create process after close")
+        if self._created:
+            return  # process already exists, recycle
         (stdout, stderr) = await self._transport.create(log_level)
 
+        self._created = True
         asyncio.create_task(_iterate_logs(self._get_log_source, "stdout", stdout))
         asyncio.create_task(_iterate_logs(self._get_log_source, "stderr", stderr))
 

@@ -38,11 +38,6 @@ class PipeWorkerTransport(WorkerTransport):
         self.ipc = None
 
     async def create(self, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
-        if self.ipc is not None:
-            # TODO: Need to avoid this really, I'm not sure that this is
-            #   reachable even now. But we need to detect this condition in
-            #   Worker and not call create if we're reusing.
-            return  # process already exists, recycle
         async with self.io_lock:
             self.ipc = pipe_ipc.AsyncioParentComm()
             env = os.environ.copy()
