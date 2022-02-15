@@ -193,9 +193,17 @@ class WorkerManager:
             return await self._create_worker(obj)
         elif action == "worker_msg":
             worker_id = obj["worker_id"]
-            log.debug(f"Forwarding master message to {worker_id}")
-            worker = self._workers[worker_id]
-            await worker.transport.send(obj["msg"])
+            try:
+                log.debug(f"Forwarding master message to {worker_id}")
+                worker = self._workers[worker_id]
+                await worker.transport.send(obj["msg"])
+            except ConnectionError as ex:
+                log.error(f"Failed to send message to worker {worker_id}: {ex}")
+                await self._send({
+                    "action": "worker_error",
+                    "worker_id": worker_id,
+                    "msg": f"Failed to send message: {ex}"
+                })
         elif action == "close_worker":
             worker_id = obj["worker_id"]
             log.info(f"Closing worker {worker_id}")
