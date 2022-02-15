@@ -141,10 +141,11 @@ class WorkerManagerProxy:
                     raise RuntimeError(f"Unexpected action {action}")
         except asyncio.CancelledError:
             pass
-        except:
-            log.error(
+        except Exception:
+            # This is signalled to the worker manager by closing
+            # the connection and to all ManagedWorkerTransports in `_close`
+            log.exception(
                 "Unhandled exception in handling message from worker manager",
-                exc_info=True
             )
         finally:
             log.info(f"Shutting down worker manager {self._id}")
@@ -154,6 +155,13 @@ class WorkerManagerProxy:
         self._detach()
         workers = list(self._workers.values())
         self._workers.clear()
+        for worker in workers:
+            if not worker.created.done():
+                worker.created.set_exception(RuntimeError(
+                    "WorkerManger closing during create"
+                ))
+            if not worker.closed.done():
+                worker.closed.set_result(None)
         if workers:
             (_, pending) = await asyncio.wait(
                 [worker.recv_queue.put("") for worker in workers] +
