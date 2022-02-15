@@ -112,7 +112,7 @@ async def worker_manager(worker_manager_db, worker_manager_port):
             BIND, worker_manager_port, manager_id, description,
             transport_factory=FakeWorkerTransport
         )
-        exit.push_async_callback(worker_manager.close)
+        exit.push_async_callback(worker_manager.stop)
         await wait_for(lambda: assert_num_connection(worker_manager_db))
 
         yield worker_manager
@@ -198,7 +198,7 @@ async def test_worker_manager_connection(worker_manager_db, worker_manager_port)
         worker_manager = await wait_for(WorkerManager.create(
             BIND, worker_manager_port, manager_id, description,
         ))
-        exit.push_async_callback(worker_manager.close)
+        exit.push_async_callback(worker_manager.stop)
 
         await wait_for(lambda: assert_num_connection(worker_manager_db))
 

@@ -14,6 +14,11 @@ from artiq.master.worker_transport import PipeWorkerTransport, WorkerTransport
 log = logging.getLogger(__name__)
 
 
+# Raising SystemExit prevents more async from running.
+class GracefulExit(Exception):
+    pass
+
+
 class _WorkerState:
 
     def __init__(self, transport, msg_task, stdout_task, stderr_task):
@@ -75,42 +80,82 @@ class WorkerManager:
         })
 
     def start(self):
+        """Start the worker manager
+        """
         self._task = asyncio.create_task(self.process_master_msgs())
 
+    async def wait_for_exit(self):
+        await self._task
+
+    async def stop(self):
+        """ Stop the worker manager
+
+        Waits for the teardown to complete
+        """
+        self._task.cancel()
+        await self.wait_for_exit()
+
     async def process_master_msgs(self):
-        while True:
-            line = await self._reader.readline()
-            if not line:
-                break
-            asyncio.create_task(self._handle_msg(line))
+        read = asyncio.create_task(self._reader.readline())
+        tasks = {read}
+        try:
+            while True:
+                (done, tasks) = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                for task in done:
+                    if task is read:
+                        line = task.result()
+                        if not line:
+                            log.warning("Connection to master lost")
+                            return
+                        tasks.add(asyncio.create_task(self._handle_msg(line)))
+                        read = asyncio.create_task(self._reader.readline())
+                        tasks.add(read)
+                    else:
+                        # Propagate exceptions and add any new tasks created by
+                        # tasks to the list of tasks we propagate exceptions
+                        # for
+                        new_tasks = task.result()
+                        if new_tasks is not None:
+                            tasks.update(new_tasks)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            await self._clean_up()
+            tasks = [
+                task
+                for task in tasks
+                if task is not read and not task.done()
+            ]
+            if tasks:
+                log.info("Cancelling remaining tasks")
+                for task in tasks:
+                    task.cancel()
+                (_, tasks) = await asyncio.wait(tasks, timeout=0.5)
+                if tasks:
+                    log.warning(f"{len(tasks)} tasks did not exit")
 
     async def _handle_msg(self, line):
         obj = pyon.decode(line.decode())
-        try:
-            action = obj["action"]
-            if action == "create_worker":
-                await self._create_worker(obj)
-            elif action == "worker_msg":
-                worker_id = obj["worker_id"]
-                worker = self._workers[worker_id]
-                await worker.transport.send(obj["msg"])
-            elif action == "close_worker":
-                worker_id = obj["worker_id"]
-                log.info(f"Closing worker {worker_id}")
-                worker = self._workers.pop(worker_id)
-                await self._close_worker(worker, obj["term_timeout"], obj["rid"])
-                await self._send({
-                    "action": "worker_closed",
-                    "worker_id": worker_id,
-                })
-                if self._exit_on_idle and len(self._workers) == 0:
-                    self.stop_request.set()
-            else:
-                # TODO signal error to master
-                raise RuntimeError(f"Unknown action {action}")
-        except KeyError as ex:
-            log.error(f"Missing key {ex} in msg {obj!r}", exc_info=True)
-            # TODO reraise and signal failure to master
+        action = obj["action"]
+        if action == "create_worker":
+            return await self._create_worker(obj)
+        elif action == "worker_msg":
+            worker_id = obj["worker_id"]
+            worker = self._workers[worker_id]
+            await worker.transport.send(obj["msg"])
+        elif action == "close_worker":
+            worker_id = obj["worker_id"]
+            log.info(f"Closing worker {worker_id}")
+            worker = self._workers.pop(worker_id)
+            await self._close_worker(worker, obj["term_timeout"], obj["rid"])
+            await self._send({
+                "action": "worker_closed",
+                "worker_id": worker_id,
+            })
+            if self._exit_on_idle and len(self._workers) == 0:
+                raise GracefulExit()
+        else:
+            raise RuntimeError(f"Unknown action {action}")
 
     async def _process_worker_msgs(self, worker_id, transport: WorkerTransport):
         while True:
@@ -132,8 +177,6 @@ class WorkerManager:
             })
         else:
             log.info(f"Worker {worker_id} exited")
-        # TODO do we get a close worker message from the master
-        #  based on the fact that Worker._recv doesn't do any clean up then yes
 
     async def _process_worker_output(
             self,
@@ -184,8 +227,9 @@ class WorkerManager:
             "action": "worker_created",
             "worker_id": worker_id
         })
+        return [msg_task, stdout_task, stderr_task]
 
-    async def _close_worker(self, worker, term_timeout=30, rid="shutdown"):
+    async def _close_worker(self, worker, term_timeout, rid):
         await worker.transport.close(term_timeout, rid)
         (_, pending) = await asyncio.wait(
             [worker.msg_task, worker.stdout_task, worker.stderr_task],
@@ -199,21 +243,16 @@ class WorkerManager:
         if worker.stderr_task in pending:
             log.warning("Stderr task didn't exit")
 
-    async def close(self):
+    async def _clean_up(self):
         log.info("Closing worker manager")
         workers = list(self._workers.values())
         self._workers.clear()
-        await asyncio.gather(*[
-            self._close_worker(worker)
-            for worker in workers
-        ])
+        if workers:
+            log.info("Stopping workers")
+            await asyncio.gather(*[
+                self._close_worker(worker, 1, "shutdown")
+                for worker in workers
+            ])
 
         self._writer.close()
         await self._writer.wait_closed()
-        self._task.cancel()
-        try:
-            await asyncio.wait_for(self._task, timeout=0.5)
-        except asyncio.CancelledError:
-            pass
-        except asyncio.TimeoutError:
-            log.warning("Timedout waiting for main task to exit")

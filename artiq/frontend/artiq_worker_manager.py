@@ -1,8 +1,9 @@
 import argparse
 import asyncio
 import logging
+import sys
 
-from artiq.worker_manager.worker_manager import WorkerManager
+from artiq.worker_manager.worker_manager import GracefulExit, WorkerManager
 
 
 def main():
@@ -47,19 +48,25 @@ def main():
     )
 
     loop = asyncio.get_event_loop()
-    mgr = loop.run_until_complete(WorkerManager.create(
-        args.master,
-        args.port,
-        args.id,
-        args.description,
-        exit_on_idle=args.exit_on_idle,
-    ))
+    mgr = loop.run_until_complete(
+        WorkerManager.create(
+            args.master,
+            args.port,
+            args.id,
+            args.description,
+            exit_on_idle=args.exit_on_idle,
+        )
+    )
     try:
-        loop.run_until_complete(mgr.stop_request.wait())
+        loop.run_until_complete(mgr.wait_for_exit())
     except KeyboardInterrupt:
         logging.info("Exiting")
-    finally:
-        loop.run_until_complete(mgr.close())
+        loop.run_until_complete(mgr.stop())
+    except GracefulExit:
+        pass
+    except:
+        logging.exception("Unhandled exception in receive loop")
+        sys.exit(1)
 
 
 if __name__ == '__main__':
