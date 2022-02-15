@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import AsyncIterator, Dict, Callable, Optional
+from typing import AsyncIterator, Awaitable, Dict, Callable, List, Optional
 import uuid
 
 from sipyco import pyon
@@ -17,6 +17,71 @@ log = logging.getLogger(__name__)
 # Raising SystemExit prevents more async from running.
 class GracefulExit(Exception):
     pass
+
+
+class BackgroundTasks:
+    """Run a dynamic set of tasks
+
+    This is somewhat limited take on optional structured concurrency. See
+    https://trio.readthedocs.io/en/stable/reference-core.html#nurseries-and-spawning
+    for an intro in to the more fully featured form.
+
+    This allows us to keep an eye on a bunch of background tasks whilst running
+    a single foreground task.
+    """
+
+    def __init__(self):
+        self._tasks = set()
+
+    async def run_foreground(self, coro):
+        """ Run coro, also propagating exception from any background tasks
+
+        Args:
+            coro: Any awaitable, that can be passed to ensure_future
+
+        Returns:
+            The return value from coro
+
+        """
+        # We must ensure that it's a future here so that we can do an is
+        # comparison with the returns from wait.
+        coro = asyncio.ensure_future(coro)
+        self._tasks.add(coro)
+        try:
+            while True:
+                (done, self._tasks) = await asyncio.wait(
+                    self._tasks, return_when=asyncio.FIRST_COMPLETED
+                )
+                for task in done:
+                    result = task.result()
+                    if task is coro:
+                        return result
+                    elif result is not None:
+                        self._tasks.update(result)
+        except:
+            self._tasks.discard(coro)
+            coro.cancel()
+            # Should we wait for coro to respond to the cancellation
+            raise
+
+    def add_background(self, coro: Awaitable[Optional[List[Awaitable]]]):
+        """Add a background task
+
+        This mustn't be called whilst a `run_foreground` call is in progress.
+        `coro` may return additional background tasks to add to this when it
+        completes.
+        Any exceptions raised by coroutines running in the "background" will
+        be propagated through calls to `run_foreground`.
+
+        Args:
+            coro: A coro to run in the "background"
+        """
+        self._tasks.add(asyncio.ensure_future(coro))
+
+    def take_tasks(self):
+        tasks = self._tasks
+        self._tasks = set()
+        return tasks
 
 
 class _WorkerState:
@@ -96,35 +161,22 @@ class WorkerManager:
         await self.wait_for_exit()
 
     async def process_master_msgs(self):
-        read = asyncio.create_task(self._reader.readline())
-        tasks = {read}
+        tasks = BackgroundTasks()
         try:
             while True:
-                (done, tasks) = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
-                for task in done:
-                    if task is read:
-                        line = task.result()
-                        if not line:
-                            log.warning("Connection to master lost")
-                            return
-                        tasks.add(asyncio.create_task(self._handle_msg(line)))
-                        read = asyncio.create_task(self._reader.readline())
-                        tasks.add(read)
-                    else:
-                        # Propagate exceptions and add any new tasks created by
-                        # tasks to the list of tasks we propagate exceptions
-                        # for
-                        new_tasks = task.result()
-                        if new_tasks is not None:
-                            tasks.update(new_tasks)
+                line = await tasks.run_foreground(self._reader.readline())
+                if not line:
+                    log.warning("Connection to master lost")
+                    break
+                tasks.add_background(self._handle_msg(line))
         except asyncio.CancelledError:
             pass
         finally:
             await self._clean_up()
             tasks = [
                 task
-                for task in tasks
-                if task is not read and not task.done()
+                for task in tasks.take_tasks()
+                if not task.done()
             ]
             if tasks:
                 log.info("Cancelling remaining tasks")
@@ -141,6 +193,7 @@ class WorkerManager:
             return await self._create_worker(obj)
         elif action == "worker_msg":
             worker_id = obj["worker_id"]
+            log.debug(f"Forwarding master message to {worker_id}")
             worker = self._workers[worker_id]
             await worker.transport.send(obj["msg"])
         elif action == "close_worker":
