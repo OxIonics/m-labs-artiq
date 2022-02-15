@@ -33,7 +33,7 @@ def get_argparser():
     common_args.simple_network_args(parser, [
         ("notify", "notifications", 3250),
         ("control", "control", 3251),
-        ("worker_manager", "worker manager", 3252),
+        ("worker_manager", "worker manager", 3277),
         ("logging", "remote logging", 1066),
         ("broadcast", "broadcasts", 1067)
     ])

@@ -20,7 +20,7 @@ def main():
     parser.add_argument(
         "--port",
         help="The port to connect to on the master",
-        default=3252,
+        default=3277,
     )
     parser.add_argument(
         "--exit-on-idle",
