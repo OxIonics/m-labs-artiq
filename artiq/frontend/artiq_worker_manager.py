@@ -3,6 +3,8 @@ import asyncio
 import logging
 import sys
 
+from artiq.master.worker_transport import PipeWorkerTransport
+from artiq.test_tools.thread_worker_transport import ThreadWorkerTransport
 from artiq.worker_manager.worker_manager import GracefulExit, WorkerManager
 
 
@@ -33,6 +35,13 @@ def main():
         help="increase logging level. -v for info -vv for debug",
     )
     parser.add_argument(
+        "--thread-worker",
+        default=False,
+        action="store_true",
+        help="Run the workers as threads not processes. "
+             "Can be useful for debugging."
+    )
+    parser.add_argument(
         "description",
         help="The human readable description for the worker manager"
     )
@@ -47,6 +56,11 @@ def main():
         format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
     )
 
+    if args.thread_worker:
+        transport_factory = ThreadWorkerTransport
+    else:
+        transport_factory = PipeWorkerTransport
+
     loop = asyncio.get_event_loop()
     mgr = loop.run_until_complete(
         WorkerManager.create(
@@ -55,6 +69,7 @@ def main():
             args.id,
             args.description,
             exit_on_idle=args.exit_on_idle,
+            transport_factory=transport_factory,
         )
     )
     try:
