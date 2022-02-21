@@ -8,6 +8,7 @@ scanning devices, scheduling experiments, and looking for experiments/devices.
 
 import argparse
 import logging
+from os.path import abspath
 import socket
 import subprocess
 import uuid
@@ -171,10 +172,15 @@ def _action_submit(remote, args):
     else:
         worker_manager_id = None
 
+    if worker_manager_id is None:
+        file = args.file
+    else:
+        file = abspath(args.file)
+
     try:
         expid = {
             "log_level": logging.WARNING + args.quiet*10 - args.verbose*10,
-            "file": args.file,
+            "file": file,
             "class_name": args.class_name,
             "arguments": arguments,
             "worker_manager_id": worker_manager_id,
