@@ -19,6 +19,7 @@ from artiq.master.scheduler import Scheduler
 from artiq.master.rid_counter import RIDCounter
 from artiq.master.experiments import (FilesystemBackend, GitBackend,
                                       ExperimentDB)
+from artiq.master.worker_managers import WorkerManagerDB
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +33,7 @@ def get_argparser():
     common_args.simple_network_args(parser, [
         ("notify", "notifications", 3250),
         ("control", "control", 3251),
+        ("worker_manager", "worker manager", 3277),
         ("logging", "remote logging", 1066),
         ("broadcast", "broadcasts", 1067)
     ])
@@ -102,6 +104,10 @@ def main():
     atexit_register_coroutine(dataset_namespaces.stop)
 
     worker_handlers = dict()
+    worker_manager_db = loop.run_until_complete(
+        WorkerManagerDB.create(bind, args.port_worker_manager)
+    )
+    atexit_register_coroutine(worker_manager_db.close)
 
     if args.git:
         repo_backend = GitBackend(args.repository)
@@ -111,8 +117,10 @@ def main():
         repo_backend, worker_handlers, args.experiment_subdir)
     atexit.register(experiment_db.close)
 
-    scheduler = Scheduler(RIDCounter(), worker_handlers, experiment_db,
-                          dataset_namespaces)
+    scheduler = Scheduler(
+        RIDCounter(), worker_handlers, worker_manager_db, experiment_db,
+        dataset_namespaces,
+    )
     scheduler.start()
     atexit_register_coroutine(scheduler.stop)
 

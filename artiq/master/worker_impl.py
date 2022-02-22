@@ -344,6 +344,7 @@ def main():
             obj = get_object()
             action = obj["action"]
             if action == "build":
+                logger.info("Starting build")
                 start_time = time.time()
                 rid = obj["rid"]
                 expid = obj["expid"]
@@ -366,11 +367,15 @@ def main():
                 os.chdir(dirname)
                 argument_mgr = ProcessArgumentManager(expid["arguments"])
                 exp_inst = exp((device_mgr, dataset_mgr, argument_mgr, {}))
+                logger.info("Completed build")
                 put_completed()
             elif action == "prepare":
+                logger.info("Starting prepare")
                 exp_inst.prepare()
+                logger.info("Completed prepare")
                 put_completed()
             elif action == "run":
+                logger.info("Starting run")
                 run_time = time.time()
                 try:
                     exp_inst.run()
@@ -379,14 +384,19 @@ def main():
                     # for end of analyze stage.
                     write_results()
                     raise
+                logger.info("Completed run")
                 put_completed()
             elif action == "analyze":
+                logger.info("Starting analyze")
                 try:
                     exp_inst.analyze()
+                    logger.info("Completed analyze")
                     put_completed()
                 finally:
                     write_results()
             elif action == "examine":
+                # No logging for examine it's not part of the main worker life
+                # cycle and I think it would get a bit chatty
                 examine(ExamineDeviceMgr, ExamineDatasetMgr, obj["file"])
                 put_completed()
             elif action == "terminate":
