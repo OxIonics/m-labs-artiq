@@ -10,6 +10,7 @@ from sipyco.sync_struct import Subscriber, process_mod
 from sipyco import pyon
 from sipyco.pipe_ipc import AsyncioChildComm
 
+from artiq.consts import NOTIFY_PORT
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +92,7 @@ class SimpleApplet:
                  "for dataset notifications "
                  "(ignored in embedded mode)")
         group.add_argument(
-            "--port", default=3250, type=int,
+            "--port", default=NOTIFY_PORT, type=int,
             help="TCP port to connect to")
 
         self._arggroup_datasets = self.argparser.add_argument_group("datasets")

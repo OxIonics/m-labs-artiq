@@ -13,7 +13,7 @@ from sipyco import common_args
 from sipyco.asyncio_tools import atexit_register_coroutine
 
 from artiq import __version__ as artiq_version
-from artiq.consts import CONTROL_PORT, WORKER_MANAGER_PORT
+from artiq.consts import CONTROL_PORT, NOTIFY_PORT, WORKER_MANAGER_PORT
 from artiq.master.log import log_args, init_log
 from artiq.master.databases import DeviceDB, DatasetDB, DatasetNamespaces
 from artiq.master.results import ResultStore
@@ -33,7 +33,7 @@ def get_argparser():
                         help="print the ARTIQ version number")
 
     common_args.simple_network_args(parser, [
-        ("notify", "notifications", 3250),
+        ("notify", "notifications", NOTIFY_PORT),
         ("control", "control", CONTROL_PORT),
         ("worker_manager", "worker manager", WORKER_MANAGER_PORT),
         ("logging", "remote logging", 1066),
