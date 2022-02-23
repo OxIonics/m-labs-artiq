@@ -76,7 +76,11 @@ async def aempty() -> AsyncIterator[Any]:
 _done_import_hook = False
 
 
-def _install_import_hook():
+def install_import_hook():
+    """Install the import_cache's import hook if it's not already been done
+
+    This should be done before importing any experiment code.
+    """
     global _done_import_hook
     if not _done_import_hook:
         import_cache.install_hook()
@@ -109,7 +113,7 @@ class ThreadWorkerTransport(WorkerTransport):
         self.ipc: Optional[thread_pipe_ipc.AsyncioParentComm] = None
 
     async def create(self, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
-        _install_import_hook()
+        install_import_hook()
         # A different uuid from the one we use to identify the worker else where
         # :sad_face:
         thread_name = f"worker-{uuid.uuid4()}"
