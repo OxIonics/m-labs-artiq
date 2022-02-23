@@ -27,6 +27,7 @@ from sipyco.sync_struct import Subscriber
 from sipyco.broadcast import Receiver
 from sipyco import common_args, pyon
 
+from artiq.consts import CONTROL_PORT
 from artiq.tools import short_format, parse_arguments
 from artiq import __version__ as artiq_version
 
@@ -361,7 +362,7 @@ def main():
         else:
             raise ValueError
     else:
-        port = 3251 if args.port is None else args.port
+        port = CONTROL_PORT if args.port is None else args.port
         target_name = {
             "submit": "master_schedule",
             "delete": "master_schedule",

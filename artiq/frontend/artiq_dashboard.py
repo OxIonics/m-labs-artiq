@@ -20,6 +20,7 @@ from sipyco import common_args
 from sipyco.asyncio_tools import atexit_register_coroutine
 
 from artiq import __artiq_dir__ as artiq_dir, __version__ as artiq_version
+from artiq.consts import CONTROL_PORT
 from artiq.tools import get_user_config_dir
 from artiq.gui.models import ModelSubscriber
 from artiq.gui import state, log
@@ -39,7 +40,7 @@ def get_argparser():
         "--port-notify", default=3250, type=int,
         help="TCP port to connect to for notifications")
     parser.add_argument(
-        "--port-control", default=3251, type=int,
+        "--port-control", default=CONTROL_PORT, type=int,
         help="TCP port to connect to for control")
     parser.add_argument(
         "--port-broadcast", default=1067, type=int,
