@@ -3,6 +3,7 @@ import asyncio
 import logging
 import sys
 
+from artiq.consts import WORKER_MANAGER_PORT
 from artiq.master.worker_transport import PipeWorkerTransport
 from artiq.test_tools.thread_worker_transport import ThreadWorkerTransport
 from artiq.worker_manager.worker_manager import GracefulExit, WorkerManager
@@ -22,7 +23,7 @@ def main():
     parser.add_argument(
         "--port",
         help="The port to connect to on the master",
-        default=3277,
+        default=WORKER_MANAGER_PORT,
     )
     parser.add_argument(
         "--exit-on-idle",

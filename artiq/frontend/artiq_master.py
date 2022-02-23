@@ -13,6 +13,7 @@ from sipyco import common_args
 from sipyco.asyncio_tools import atexit_register_coroutine
 
 from artiq import __version__ as artiq_version
+from artiq.consts import WORKER_MANAGER_PORT
 from artiq.master.log import log_args, init_log
 from artiq.master.databases import DeviceDB, DatasetDB, DatasetNamespaces
 from artiq.master.results import ResultStore
@@ -34,7 +35,7 @@ def get_argparser():
     common_args.simple_network_args(parser, [
         ("notify", "notifications", 3250),
         ("control", "control", 3251),
-        ("worker_manager", "worker manager", 3277),
+        ("worker_manager", "worker manager", WORKER_MANAGER_PORT),
         ("logging", "remote logging", 1066),
         ("broadcast", "broadcasts", 1067)
     ])
