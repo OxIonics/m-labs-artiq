@@ -194,7 +194,6 @@ class WorkerManager:
         elif action == "worker_msg":
             worker_id = obj["worker_id"]
             try:
-                log.debug(f"Forwarding master message to {worker_id}")
                 worker = self._workers[worker_id]
                 await worker.transport.send(obj["msg"])
             except ConnectionError as ex:
