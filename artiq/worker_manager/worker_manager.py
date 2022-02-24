@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import AsyncIterator, Awaitable, Dict, Callable, List, Optional
+import socket
+from typing import AsyncIterator, Awaitable, Dict, Callable, Iterator, List, Optional
 import uuid
 
 from sipyco import pyon
 from sipyco.logging_tools import LogParser
 
+from artiq.consts import WORKER_MANAGER_PORT
 from artiq.master.worker_transport import PipeWorkerTransport, WorkerTransport
 
 
@@ -97,12 +99,31 @@ class WorkerManager:
 
     @classmethod
     async def create(
-            cls, host, port, manager_id, description,
+            cls, host,
+            port=WORKER_MANAGER_PORT,
+            manager_id: Optional[str] = None,
+            description: Optional[str] = None,
             transport_factory=PipeWorkerTransport,
             **kwargs
     ) -> WorkerManager:
+        """ Create and start the worker manager
+
+        Args:
+            host: Artiq master to connect to
+            port: The port of the artiq master to connect to normally
+                `artiq.consts.WORKER_MANAGER_PORT
+            manager_id: Optional globally unique id for the worker manager
+                defaults to a new UUID4.
+            description: The description to pass to the master defaults to the
+                current host name
+            transport_factory: The actual implementation of the worker to use
+            **kwargs: More kw only arguments passed to the `WorkerManager
+                constructor
+        """
         if manager_id is None:
             manager_id = str(uuid.uuid4())
+        if description is None:
+            description = socket.gethostname()
         logging.info(f"Connecting to {host}:{port} with id {manager_id}")
         reader, writer = await asyncio.open_connection(host, port)
         instance = cls(
