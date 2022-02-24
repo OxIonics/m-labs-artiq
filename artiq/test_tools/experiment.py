@@ -19,6 +19,7 @@ log = logging.getLogger(__name__)
 
 class ExperimentFailure(Exception):
     """Represents an exception that was caught in the experiment"""
+
     def __init__(self, data):
         self.data = data
 
@@ -42,7 +43,7 @@ class ExperimentFailure(Exception):
 
 
 class TestExperiment(EnvExperiment):
-    """ Experiments for use with `run_experiment`
+    """Experiments for use with `run_experiment`
 
     Catches exceptions and allows them to be reported by `run_experiment`.
     Use `set_test_data` to set data that will be returned from `run_experiment`
@@ -106,6 +107,17 @@ async def _plain_dict_subscriber(master, port, notifier, notify_cb):
         await subscriber.close()
 
 
+def summarise_mod(mod):
+    if mod["action"] == "init":
+        return "init"
+    elif mod["action"] in ["append", "insert", "pop"]:
+        return f"{mod['action']} on {mod['path']}"
+    elif mod["action"] in ["setitem", "delitem"]:
+        return f"{mod['action']} '{mod['key']}' in {mod['path']}"
+    else:
+        return f"Unknown action ({mod['action']}"
+
+
 async def run_experiment(
     master,
     experiment_class: Type,
@@ -152,7 +164,7 @@ async def run_experiment(
 
         def schedule_cb(mod):
             try:
-                log.debug(f"Got schedule update {mod['action']} on {mod.get('path')} of {mod.get('key')}")
+                log.debug(f"Got schedule update {summarise_mod(mod)}")
                 if (
                     rid is not None
                     and mod["action"] == sync_struct.ModAction.delitem.name
@@ -160,28 +172,39 @@ async def run_experiment(
                     and mod["key"] == rid
                 ):
                     complete.set_result(None)
-            except:
-                complete.set_exception(sys.exc_info()[1])
+            except Exception as ex:
+                complete.set_exception(ex)
                 raise
 
         def dataset_cb(mod):
-            log.debug(f"Got dataset update {mod['action']} on {mod.get('path')} of {mod.get('key')}")
+            log.debug(f"Got dataset update {summarise_mod(mod)}")
 
-        await stack.enter_async_context(
-            _plain_dict_subscriber(master, notify_port, "schedule", schedule_cb)
-        )
-        dataset = await stack.enter_async_context(
-            _plain_dict_subscriber(master, notify_port, "datasets", dataset_cb)
+        (_, dataset, worker_manager) = await asyncio.gather(
+            stack.enter_async_context(
+                _plain_dict_subscriber(master, notify_port, "schedule", schedule_cb)
+            ),
+            stack.enter_async_context(
+                _plain_dict_subscriber(master, notify_port, "datasets", dataset_cb)
+            ),
+            stack.enter_async_context(
+                WorkerManager.context(
+                    master,
+                    worker_manager_port,
+                    None,
+                    f"{socket.gethostname()}-tests",
+                    transport_factory=ThreadWorkerTransport,
+                )
+            ),
         )
 
-        worker_manager = await WorkerManager.create(
-            master,
-            worker_manager_port,
-            None,
-            f"{socket.gethostname()}-tests",
-            transport_factory=ThreadWorkerTransport,
-        )
-        stack.push_async_callback(worker_manager.stop)
+        # TODO technically there's a race because we don't know that the master
+        #  has recieved and processed the worker manager connect yet. We
+        #  should have another subscriber to wait for that. But it requires
+        #  server side support that's not done yet.
+        #  At the moment we're likely to get lucky because we have an implicit
+        #  delay in `_submit_experiment` whilst the RPC client connects. If we
+        #  had the capability to subscribe to worker managers I'd be tempted to
+        #  move the connect in to the above gather.
 
         # rid used by notify_cb
         rid = await _submit_experiment(
@@ -198,7 +221,7 @@ async def run_experiment(
 
         prefix = f"data.{rid}."
         data = {
-            key[len(prefix):]: value
+            key[len(prefix) :]: value
             for key, (_, value) in dataset.items()
             if key.startswith(prefix)
         }
@@ -210,14 +233,8 @@ async def run_experiment(
 
 
 async def _submit_experiment(
-        master,
-        control_port,
-        pipeline,
-        manager_id,
-        experiment_class,
-        arguments,
-        log_level
-        ):
+    master, control_port, pipeline, manager_id, experiment_class, arguments, log_level
+):
     master_client = pc_rpc.AsyncioClient()
     await master_client.connect_rpc(master, control_port, "master_schedule")
 

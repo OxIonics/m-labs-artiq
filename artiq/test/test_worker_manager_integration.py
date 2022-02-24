@@ -107,12 +107,10 @@ async def worker_manager(worker_manager_db, worker_manager_port):
     manager_id = str(uuid.uuid4())
     description = "Test workers"
 
-    async with AsyncExitStack() as exit:
-        worker_manager = await WorkerManager.create(
-            BIND, worker_manager_port, manager_id, description,
-            transport_factory=FakeWorkerTransport
-        )
-        exit.push_async_callback(worker_manager.stop)
+    async with WorkerManager.context(
+        BIND, worker_manager_port, manager_id, description,
+        transport_factory=FakeWorkerTransport
+    ) as worker_manager:
         await wait_for(lambda: assert_num_connection(worker_manager_db))
 
         yield worker_manager

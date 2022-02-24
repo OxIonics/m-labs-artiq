@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+from contextlib import asynccontextmanager
 import logging
 import socket
 from typing import AsyncIterator, Awaitable, Dict, Callable, Iterator, List, Optional
@@ -134,6 +135,19 @@ class WorkerManager:
         instance.start()
         await instance.send_hello()
         return instance
+
+    @classmethod
+    @asynccontextmanager
+    async def context(cls, *args, **kwargs) -> Iterator[WorkerManager]:
+        """ Create, start and (on exit) stop a worker manager
+
+        All arguments are forwarded to `create`
+        """
+        instance = await cls.create(*args, **kwargs)
+        try:
+            yield instance
+        finally:
+            await instance.stop()
 
     def __init__(
             self, worker_manager_id, description, reader, writer,
