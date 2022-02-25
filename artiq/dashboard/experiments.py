@@ -3,6 +3,7 @@ import asyncio
 import os
 from functools import partial
 from collections import OrderedDict
+import urllib.parse
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 import h5py
@@ -20,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Experiment URLs come in two forms:
 # 1. repo:<experiment name>
 #    (file name and class name to be retrieved from explist)
-# 2. file:<class name>@<file name>
+# 2. file:<file name>#<class name>
 
 
 class _WheelFilter(QtCore.QObject):
@@ -598,14 +599,16 @@ class ExperimentManager:
         self.schedule = model.backing_store
 
     def resolve_expurl(self, expurl):
-        if expurl[:5] == "repo:":
-            expinfo = self.explist[expurl[5:]]
+        parsed = urllib.parse.urlparse(expurl)
+        if parsed.scheme == "repo":
+            expinfo = self.explist[parsed.path]
             return expinfo["file"], expinfo["class_name"], True
-        elif expurl[:5] == "file:":
-            class_name, file = expurl[5:].split("@", maxsplit=1)
-            return file, class_name, False
+        elif parsed.scheme == "file":
+            return parsed.path, parsed.fragment, False
         else:
-            raise ValueError("Malformed experiment URL")
+            raise ValueError("Malformed experiment URL: unrecognised scheme '{}'".format(
+                parsed.scheme
+            ))
 
     def get_argument_editor_class(self, expurl):
         ui_name = self.argument_ui_names.get(expurl, None)
@@ -778,7 +781,7 @@ class ExperimentManager:
     async def open_file(self, file):
         description = await self.experiment_db_ctl.examine(file, False)
         for class_name, class_desc in description.items():
-            expurl = "file:{}@{}".format(class_name, file)
+            expurl = "file:{}#{}".format(file, class_name)
             self.initialize_submission_arguments(expurl, class_desc["arginfo"],
                 class_desc.get("argument_ui", None))
             if expurl in self.open_experiments:
