@@ -22,6 +22,7 @@ __pycache__/
 /artiq_*/
 
 /artiq/test/results
+/artiq/test/lit/.lit_test_times.txt
 /artiq/examples/*/results
 /artiq/examples/*/last_rid.pyon
 /artiq/examples/*/dataset_db.pyon
