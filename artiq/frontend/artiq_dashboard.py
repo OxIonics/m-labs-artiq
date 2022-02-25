@@ -6,7 +6,10 @@ import atexit
 import importlib
 import os
 import logging
+import signal
+import socket
 import sys
+import uuid
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 from qasync import QEventLoop
@@ -94,6 +97,33 @@ class MdiArea(QtWidgets.QMdiArea):
         painter.drawPixmap(x, y, self.pixmap)
 
 
+async def start_local_worker_manager(args):
+    worker_manager_id = str(uuid.uuid4())
+
+    cmd = [
+        sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
+        "--id", worker_manager_id,
+        socket.gethostname(), args.server,
+    ]
+    if args.verbose:
+        cmd.append("-" + "v" * args.verbose)
+
+    process = await asyncio.create_subprocess_exec(*cmd)
+
+    async def stop_local_worker_manager():
+        process.send_signal(signal.SIGINT)
+        try:
+            await asyncio.wait_for(process.wait(), 5)
+        except asyncio.TimeoutError:
+            logging.error("Local worker manager didn't exit from sigint")
+            process.kill()
+
+    atexit_register_coroutine(stop_local_worker_manager)
+
+    return worker_manager_id
+
+
+
 def main():
     # initialize application
     args = get_argparser().parse_args()
@@ -114,6 +144,8 @@ def main():
     asyncio.set_event_loop(loop)
     atexit.register(loop.close)
     smgr = state.StateManager(args.db_file)
+
+    local_worker_manager_id = loop.run_until_complete(start_local_worker_manager(args))
 
     # create connections to master
     rpc_clients = dict()
@@ -172,7 +204,8 @@ def main():
                                            sub_clients["explist"],
                                            sub_clients["schedule"],
                                            rpc_clients["schedule"],
-                                           rpc_clients["experiment_db"])
+                                           rpc_clients["experiment_db"],
+                                           local_worker_manager_id)
     smgr.register(expmgr)
     d_shortcuts = shortcuts.ShortcutsDock(main_window, expmgr)
     smgr.register(d_shortcuts)

@@ -19,9 +19,18 @@ logger = logging.getLogger(__name__)
 
 
 # Experiment URLs come in two forms:
-# 1. repo:<experiment name>
+# 1. repo:[//worker_manager_id/]<experiment name>
 #    (file name and class name to be retrieved from explist)
-# 2. file:<file name>#<class name>
+# 2. file:[//worker_manger_id/]<file name>#<class name>
+
+def make_url(scheme, host, path, fragment=None):
+    result = scheme + ":"
+    if host is not None:
+        result += "//" + host + "/"
+    result += path
+    if fragment is not None:
+        result += "#" + fragment
+    return result
 
 
 class _WheelFilter(QtCore.QObject):
@@ -562,10 +571,13 @@ class ExperimentManager:
 
     def __init__(self, main_window, dataset_sub,
                  explist_sub, schedule_sub,
-                 schedule_ctl, experiment_db_ctl):
+                 schedule_ctl, experiment_db_ctl,
+                 local_worker_manager_id,
+                 ):
         self.main_window = main_window
         self.schedule_ctl = schedule_ctl
         self.experiment_db_ctl = experiment_db_ctl
+        self.local_worker_manager_id = local_worker_manager_id
 
         self.dock_states = dict()
         self.submission_scheduling = dict()
@@ -600,15 +612,25 @@ class ExperimentManager:
 
     def resolve_expurl(self, expurl):
         parsed = urllib.parse.urlparse(expurl)
+        urlpath = parsed.path
+        worker_manager_id = None
+        if parsed.hostname:
+            worker_manager_id = parsed.hostname
+            urlpath = urlpath[1:]
         if parsed.scheme == "repo":
-            expinfo = self.explist[parsed.path]
-            return expinfo["file"], expinfo["class_name"], True
+            expinfo = self.explist[urlpath]
+            file = expinfo["file"]
+            class_name = expinfo["class_name"]
+            repository = True
         elif parsed.scheme == "file":
-            return parsed.path, parsed.fragment, False
+            file = urlpath
+            class_name = parsed.fragment
+            repository = False
         else:
             raise ValueError("Malformed experiment URL: unrecognised scheme '{}'".format(
                 parsed.scheme
             ))
+        return worker_manager_id, file, class_name, repository
 
     def get_argument_editor_class(self, expurl):
         ui_name = self.argument_ui_names.get(expurl, None)
@@ -714,7 +736,7 @@ class ExperimentManager:
         logger.info("Submitted '%s', RID is %d", expurl, rid)
 
     def submit(self, expurl):
-        file, class_name, _ = self.resolve_expurl(expurl)
+        worker_manager_id, file, class_name, _ = self.resolve_expurl(expurl)
         scheduling = self.get_submission_scheduling(expurl)
         options = self.get_submission_options(expurl)
         arguments = self.get_submission_arguments(expurl)
@@ -729,6 +751,7 @@ class ExperimentManager:
             "file": file,
             "class_name": class_name,
             "arguments": argument_values,
+            "worker_manager_id": worker_manager_id,
         }
         if "repo_rev" in options:
             expid["repo_rev"] = options["repo_rev"]
@@ -753,7 +776,11 @@ class ExperimentManager:
         logger.info(
             "Requesting termination of all instances "
             "of '%s'", expurl)
-        file, class_name, use_repository = self.resolve_expurl(expurl)
+        worker_manager_id, file, class_name, use_repository = self.resolve_expurl(expurl)
+        if worker_manager_id is not None:
+            raise NotImplementedError(
+                "Not implemented for experiments running in worker mangers"
+            )
         rids = []
         for rid, desc in self.schedule.items():
             expid = desc["expid"]
@@ -768,25 +795,31 @@ class ExperimentManager:
         asyncio.ensure_future(self._request_term_multiple(rids))
 
     async def compute_expdesc(self, expurl):
-        file, class_name, use_repository = self.resolve_expurl(expurl)
+        worker_manager_id, file, class_name, use_repository = self.resolve_expurl(expurl)
         if use_repository:
             revision = self.get_submission_options(expurl)["repo_rev"]
         else:
             revision = None
         description = await self.experiment_db_ctl.examine(
-            file, use_repository, revision)
+            file, use_repository, revision, worker_manager_id)
         class_desc = description[class_name]
         return class_desc, class_desc.get("argument_ui", None)
 
-    async def open_file(self, file):
-        description = await self.experiment_db_ctl.examine(file, False)
+    async def open_file(self, file, worker_manager_id=None):
+        description = await self.experiment_db_ctl.examine(
+            file, False,
+            worker_manager_id=worker_manager_id,
+        )
         for class_name, class_desc in description.items():
-            expurl = "file:{}#{}".format(file, class_name)
+            expurl = make_url("file", worker_manager_id, file, class_name)
             self.initialize_submission_arguments(expurl, class_desc["arginfo"],
                 class_desc.get("argument_ui", None))
             if expurl in self.open_experiments:
                 self.open_experiments[expurl].close()
             self.open_experiment(expurl)
+
+    async def open_local_file(self, file):
+        await self.open_file(file, self.local_worker_manager_id)
 
     def save_state(self):
         for expurl, dock in self.open_experiments.items():

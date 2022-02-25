@@ -4,6 +4,7 @@ import re
 from functools import partial
 
 from PyQt5 import QtCore, QtWidgets
+from PyQt5.QtWidgets import QFileDialog
 
 from artiq.gui.tools import LayoutWidget
 from artiq.gui.models import DictSyncTreeSepModel
@@ -265,10 +266,25 @@ class ExplorerDock(QtWidgets.QDockWidget):
                                     experiment_db_ctl).open())
         self.el.addAction(open_file_action)
 
+        local_file_action = QtWidgets.QAction(
+            "Open local file", self.el
+        )
+        local_file_action.triggered.connect(self.open_local_file)
+        self.el.addAction(local_file_action)
+
         self.waiting_panel = WaitingPanel()
         self.stack.addWidget(self.waiting_panel)
         explist_status_sub.add_setmodel_callback(
             lambda updater: updater.set_explorer(self))
+
+    def open_local_file(self):
+        fn = QFileDialog.getOpenFileName(
+            self,
+            "Select experiment",
+            filter="Python files (*.py)",
+        )[0]
+        if fn:
+            asyncio.create_task(self.exp_manager.open_local_file(fn))
 
     def set_model(self, model):
         self.explist_model = model

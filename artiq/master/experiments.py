@@ -9,6 +9,7 @@ from sipyco.sync_struct import Notifier, update_from_dict
 
 from artiq.master.worker import (Worker, WorkerInternalException,
                                  log_worker_exception)
+from artiq.master.worker_managers import WorkerManagerDB
 from artiq.tools import get_windows_drives, exc_to_warning
 
 
@@ -84,9 +85,13 @@ class _RepoScanner:
 
 
 class ExperimentDB:
-    def __init__(self, repo_backend, worker_handlers, experiment_subdir=""):
+    def __init__(
+            self, repo_backend, worker_handlers, worker_manager_db,
+            experiment_subdir="",
+    ):
         self.repo_backend = repo_backend
         self.worker_handlers = worker_handlers
+        self.worker_manager_db: WorkerManagerDB = worker_manager_db
         self.experiment_subdir = experiment_subdir
 
         self.cur_rev = self.repo_backend.get_head_rev()
@@ -128,13 +133,26 @@ class ExperimentDB:
         asyncio.ensure_future(
             exc_to_warning(self.scan_repository(new_cur_rev)))
 
-    async def examine(self, filename, use_repository=True, revision=None):
+    async def examine(
+            self, filename, use_repository=True, revision=None,
+            worker_manager_id=None,
+    ):
+        if use_repository and worker_manager_id is not None:
+            # TODO implement this
+            raise NotImplementedError()
         if use_repository:
             if revision is None:
                 revision = self.cur_rev
+            # If revision is not None and the backend is the FileSystemBackend
+            # or a worker manager is selected then the revision is silently
+            # ignored.
             wd, _ = self.repo_backend.request_rev(revision)
             filename = os.path.join(wd, filename)
-        worker = Worker(self.worker_handlers)
+        if worker_manager_id is None:
+            worker_transport = None
+        else:
+            worker_transport = self.worker_manager_db.get_transport(worker_manager_id)
+        worker = Worker(self.worker_handlers, transport=worker_transport)
         try:
             description = await worker.examine("examine", filename)
         finally:
