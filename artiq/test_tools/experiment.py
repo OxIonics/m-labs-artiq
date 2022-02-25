@@ -136,8 +136,11 @@ async def run_experiment(
     and set breakpoints in (non-kernel) experiment code.
 
     Tests which use this should have a call to
-    thread_worker_transport.install_import_hook() in the conftest so that artiq
-    can cache files that contain kernel code and give us kernel tracebacks.
+    thread_worker_transport.install_import_hook() before the experiment code
+    is imported, so that artiq can cache files that contain kernel code and
+    give us kernel tracebacks. If you're using pytest there's a pytest plugin
+    which does this on import, so that probably handles this for you if you
+    include that plugin in your conftest.
 
     Args:
         master: The host name of an artiq master, e.g. tumbleweed.oxionics.com
