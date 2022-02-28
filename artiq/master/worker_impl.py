@@ -5,7 +5,7 @@ necessary to connect the global artefacts used from experiment code (scheduler,
 device database, etc.) to their actual implementation in the parent master
 process via IPC.
 """
-
+from io import BytesIO
 import sys
 import time
 import os
@@ -32,7 +32,6 @@ from artiq.compiler import import_cache
 from artiq.coredevice.core import CompileError, host_only, _render_diagnostic
 from artiq import __version__ as artiq_version
 
-import logging
 logger = logging.getLogger(__name__)
 
 ipc = None
@@ -308,6 +307,9 @@ def put_exception_report():
     put_object({"action": "exception"})
 
 
+_store_results = make_parent_action("store_results")
+
+
 def main():
     global ipc
 
@@ -323,14 +325,17 @@ def main():
     repository_path = None
 
     def write_results():
+        logger.info("Writing results")
+        buf = BytesIO()
         filename = "{:09}-{}.h5".format(rid, exp.__name__)
-        with h5py.File(filename, "w") as f:
+        with h5py.File(filename, "w", driver="fileobj", fileobj=buf) as f:
             dataset_mgr.write_hdf5(f)
             f["artiq_version"] = artiq_version
             f["rid"] = rid
             f["start_time"] = start_time
             f["run_time"] = run_time
             f["expid"] = pyon.encode(expid)
+        _store_results(start_time, filename, buf.getvalue())
 
     device_mgr = DeviceManager(ParentDeviceDB,
                                virtual_devices={"scheduler": Scheduler(),
@@ -390,10 +395,10 @@ def main():
                 logger.info("Starting analyze")
                 try:
                     exp_inst.analyze()
-                    logger.info("Completed analyze")
-                    put_completed()
                 finally:
                     write_results()
+                logger.info("Completed analyze")
+                put_completed()
             elif action == "examine":
                 # No logging for examine it's not part of the main worker life
                 # cycle and I think it would get a bit chatty

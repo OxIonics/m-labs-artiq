@@ -15,6 +15,7 @@ from sipyco.asyncio_tools import atexit_register_coroutine
 from artiq import __version__ as artiq_version
 from artiq.master.log import log_args, init_log
 from artiq.master.databases import DeviceDB, DatasetDB, DatasetNamespaces
+from artiq.master.results import ResultStore
 from artiq.master.scheduler import Scheduler
 from artiq.master.rid_counter import RIDCounter
 from artiq.master.experiments import (FilesystemBackend, GitBackend,
@@ -43,6 +44,11 @@ def get_argparser():
                        help="device database file (default: '%(default)s')")
     group.add_argument("--dataset-db", default="dataset_db.pyon",
                        help="dataset file (default: '%(default)s')")
+    group.add_argument(
+        "--results-root",
+        default="results",
+        help="The root directory for storing results (default: '%(default)s)",
+    )
 
     group = parser.add_argument_group("repository")
     group.add_argument(
@@ -100,6 +106,8 @@ def main():
     dataset_db.start()
     atexit_register_coroutine(dataset_db.stop)
 
+    result_store = ResultStore(args.results_root)
+
     dataset_namespaces = DatasetNamespaces(dataset_db)
     atexit_register_coroutine(dataset_namespaces.stop)
 
@@ -137,6 +145,7 @@ def main():
         "scheduler_get_status": scheduler.get_status,
         "scheduler_check_pause": scheduler.check_pause,
         "ccb_issue": ccb_issue,
+        "store_results": result_store.store,
     })
     experiment_db.scan_repository_async()
 
