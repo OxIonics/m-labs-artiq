@@ -121,7 +121,7 @@ class SchedulerCase(unittest.TestCase):
 
     def test_steps(self):
         loop = self.loop
-        scheduler = Scheduler(_RIDCounter(0), dict(), None, None)
+        scheduler = Scheduler(_RIDCounter(0), dict(), None, None, None)
         expid = _get_expid("EmptyExperiment")
 
         expect = _get_basic_steps(1, expid)
@@ -160,7 +160,7 @@ class SchedulerCase(unittest.TestCase):
         prepare."""
         loop = self.loop
         handlers = {}
-        scheduler = Scheduler(_RIDCounter(0), handlers, None, None)
+        scheduler = Scheduler(_RIDCounter(0), handlers, None, None, None)
         handlers["scheduler_check_pause"] = scheduler.check_pause
 
         expid_empty = _get_expid("EmptyExperiment")
@@ -324,7 +324,7 @@ class SchedulerCase(unittest.TestCase):
         handlers = {
             "update_dataset": check_termination
         }
-        scheduler = Scheduler(_RIDCounter(0), handlers, None, None)
+        scheduler = Scheduler(_RIDCounter(0), handlers, None, None, None)
 
         expid_bg = _get_expid("BackgroundExperiment")
         expid = _get_expid("EmptyExperiment")
@@ -383,7 +383,7 @@ class SchedulerCase(unittest.TestCase):
         """Check scheduler exits with experiments still running"""
         loop = self.loop
 
-        scheduler = Scheduler(_RIDCounter(0), {}, None, None)
+        scheduler = Scheduler(_RIDCounter(0), {}, None, None, None)
 
         expid_bg = _get_expid("BackgroundExperiment")
         # Suppress the SystemExit backtrace when worker process is killed.
@@ -424,7 +424,7 @@ class SchedulerCase(unittest.TestCase):
 
     def test_flush(self):
         loop = self.loop
-        scheduler = Scheduler(_RIDCounter(0), dict(), None, None)
+        scheduler = Scheduler(_RIDCounter(0), dict(), None, None, None)
         expid = _get_expid("EmptyExperiment")
 
         expect = _get_basic_steps(1, expid, 1, True)
@@ -498,9 +498,10 @@ class SchedulerCase(unittest.TestCase):
 
         handlers = {
             "get_dataset": get_dataset,
-            "update_dataset": check_termination
+            "update_dataset": check_termination,
+            "store_results": lambda t, f, d: None,
         }
-        scheduler = Scheduler(_RIDCounter(0), handlers, None, None)
+        scheduler = Scheduler(_RIDCounter(0), handlers, None, None, None)
 
         status_events, notify = self._make_status_events(0)
         scheduler.notifier.publish = notify
@@ -510,7 +511,7 @@ class SchedulerCase(unittest.TestCase):
         expid_idle = _get_expid("IdleExperiment")
         # Show backtraces from the worker process, shame about SystemExit
         # but the others are potentially very important.
-        expid_idle["log_level"] = logging.WARNING
+        expid_idle["log_level"] = logging.DEBUG
         scheduler.submit("main", expid_idle, 0, None, False)
 
         return scheduler, status_events, flags

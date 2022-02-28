@@ -9,6 +9,8 @@ from sipyco.asyncio_tools import TaskObject, Condition
 
 from artiq.master.worker import (Worker, log_worker_exception, ResumeAction,
                                  RunResult)
+from artiq.master.worker_managers import WorkerManagerDB
+from artiq.master.worker_transport import PipeWorkerTransport
 from artiq.tools import asyncio_wait_or_cancel
 
 
@@ -52,7 +54,7 @@ def _mk_worker_method(name):
 class Run:
     def __init__(self, rid, pipeline_name,
                  wd, expid, priority, due_date, flush,
-                 pool, **kwargs):
+                 pool, worker_transport, **kwargs):
         # called through pool
         self.rid = rid
         self.pipeline_name = pipeline_name
@@ -71,7 +73,7 @@ class Run:
                 **handlers,
                 "update_dataset": partial(namespaces.update_rid_namespace, rid)
             }
-        self.worker = Worker(handlers)
+        self.worker = Worker(handlers, worker_transport)
 
         self.termination_requested = False
 
@@ -138,7 +140,7 @@ class RunPool:
         self.experiment_db = experiment_db
         self.dataset_namespaces = dataset_namespaces
 
-    def submit(self, expid, priority, due_date, flush, pipeline_name):
+    def submit(self, expid, priority, due_date, flush, pipeline_name, worker_transport):
         # mutates expid to insert head repository revision if None.
         # called through scheduler.
         rid = self.ridc.get()
@@ -150,7 +152,7 @@ class RunPool:
         else:
             wd, repo_msg = None, None
         run = Run(rid, pipeline_name, wd, expid, priority, due_date, flush,
-                  self, repo_msg=repo_msg)
+                  self, worker_transport, repo_msg=repo_msg)
         self.runs[rid] = run
         self.state_changed.notify()
         return rid
@@ -546,12 +548,20 @@ class Deleter(TaskObject):
 
 
 class Scheduler:
-    def __init__(self, ridc, worker_handlers, experiment_db, dataset_namespaces):
+    def __init__(
+            self,
+            ridc,
+            worker_handlers,
+            worker_manager_db: WorkerManagerDB,
+            experiment_db,
+            dataset_namespaces,
+    ):
         self.notifier = Notifier(dict())
 
         self._pipelines = dict()
         self._worker_handlers = worker_handlers
         self._experiment_db = experiment_db
+        self._worker_manager_db = worker_manager_db
         self._dataset_namespaces = dataset_namespaces
         self._terminated = False
 
@@ -590,7 +600,14 @@ class Scheduler:
                                 self._experiment_db, self._dataset_namespaces)
             self._pipelines[pipeline_name] = pipeline
             pipeline.start()
-        return pipeline.pool.submit(expid, priority, due_date, flush, pipeline_name)
+        worker_manager_id = expid.get("worker_manager_id")
+        if worker_manager_id is None:
+            worker_transport = PipeWorkerTransport()
+        else:
+            worker_transport = self._worker_manager_db.get_transport(worker_manager_id)
+        return pipeline.pool.submit(
+            expid, priority, due_date, flush, pipeline_name, worker_transport,
+        )
 
     def delete(self, rid):
         """Kills the run with the specified RID."""

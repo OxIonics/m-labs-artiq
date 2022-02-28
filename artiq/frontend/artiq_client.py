@@ -8,6 +8,11 @@ scanning devices, scheduling experiments, and looking for experiments/devices.
 
 import argparse
 import logging
+from os.path import abspath
+import socket
+import subprocess
+import uuid
+
 import time
 import asyncio
 import sys
@@ -22,6 +27,7 @@ from sipyco.sync_struct import Subscriber
 from sipyco.broadcast import Receiver
 from sipyco import common_args, pyon
 
+from artiq.consts import CONTROL_PORT, NOTIFY_PORT
 from artiq.tools import short_format, parse_arguments
 from artiq import __version__ as artiq_version
 
@@ -69,6 +75,23 @@ def get_argparser():
                                  "(defaults to head, ignored without -R)")
     parser_add.add_argument("-c", "--class-name", default=None,
                             help="name of the class to run")
+    worker_mgr = parser_add.add_argument_group(
+        "Worker Manager",
+        "Optionally use a worker manager to run the experiment. If none of these "
+        "options are specified then the experiment will be executed by the master "
+        "and the experiment file must be readable by the master."
+    ).add_mutually_exclusive_group()
+    worker_mgr.add_argument(
+        "--start-worker-mgr", default=False,
+        action="store_true",
+        help="Start a local worker manager and use that to run the experiment. "
+             "The experiment file can be any path readable from the current "
+             "working directory"
+    )
+    worker_mgr.add_argument(
+        "--worker-mgr-id",
+        help="The id of an existing worker manager to use to run the experiment"
+    )
     parser_add.add_argument("file", metavar="FILE",
                             help="file containing the experiment to run")
     parser_add.add_argument("arguments", metavar="ARGUMENTS", nargs="*",
@@ -132,21 +155,59 @@ def _action_submit(remote, args):
     except Exception as err:
         raise ValueError("Failed to parse run arguments") from err
 
-    expid = {
-        "log_level": logging.WARNING + args.quiet*10 - args.verbose*10,
-        "file": args.file,
-        "class_name": args.class_name,
-        "arguments": arguments,
-    }
-    if args.repository:
-        expid["repo_rev"] = args.revision
-    if args.timed is None:
-        due_date = None
+    worker_manager = None
+    if args.start_worker_mgr:
+        worker_manager_id = str(uuid.uuid4())
+        cmd = [
+            sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
+            "--id", worker_manager_id, "--exit-on-idle",
+            socket.gethostname(), args.server,
+        ]
+        if args.verbose:
+            cmd.append("-" + "v" * args.verbose)
+        worker_manager = subprocess.Popen(cmd)
+        # TODO wait for worker manager to be connected in some more reliable way
+        time.sleep(0.5)
+    elif args.worker_mgr_id:
+        worker_manager_id = args.worker_mgr_id
     else:
-        due_date = time.mktime(parse_date(args.timed).timetuple())
-    rid = remote.submit(args.pipeline, expid,
-                        args.priority, due_date, args.flush)
-    print("RID: {}".format(rid))
+        worker_manager_id = None
+
+    if worker_manager_id is None:
+        file = args.file
+    else:
+        file = abspath(args.file)
+
+    try:
+        expid = {
+            "log_level": logging.WARNING + args.quiet*10 - args.verbose*10,
+            "file": file,
+            "class_name": args.class_name,
+            "arguments": arguments,
+            "worker_manager_id": worker_manager_id,
+        }
+        if args.repository:
+            expid["repo_rev"] = args.revision
+        if args.timed is None:
+            due_date = None
+        else:
+            due_date = time.mktime(parse_date(args.timed).timetuple())
+        rid = remote.submit(args.pipeline, expid,
+                            args.priority, due_date, args.flush)
+        print("RID: {}".format(rid))
+
+        if worker_manager:
+            worker_manager.wait()
+    finally:
+        if worker_manager is not None:
+            if worker_manager.returncode is None:
+                print("Killing worker manager")
+                worker_manager.kill()
+                worker_manager.wait(1)
+            if worker_manager.returncode is None:
+                print("Worker manager didn't exit")
+            elif worker_manager.returncode != 0:
+                print("Worker exited with non-zero return code")
 
 
 def _action_delete(remote, args):
@@ -258,7 +319,7 @@ def _show_dict(args, notifier_name, display_fun):
         return d
     subscriber = Subscriber(notifier_name, init_d,
                             lambda mod: display_fun(d))
-    port = 3250 if args.port is None else args.port
+    port = NOTIFY_PORT if args.port is None else args.port
     _run_subscriber(args.server, port, subscriber)
 
 
@@ -301,7 +362,7 @@ def main():
         else:
             raise ValueError
     else:
-        port = 3251 if args.port is None else args.port
+        port = CONTROL_PORT if args.port is None else args.port
         target_name = {
             "submit": "master_schedule",
             "delete": "master_schedule",

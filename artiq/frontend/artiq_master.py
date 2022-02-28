@@ -13,12 +13,15 @@ from sipyco import common_args
 from sipyco.asyncio_tools import atexit_register_coroutine
 
 from artiq import __version__ as artiq_version
+from artiq.consts import CONTROL_PORT, NOTIFY_PORT, WORKER_MANAGER_PORT
 from artiq.master.log import log_args, init_log
 from artiq.master.databases import DeviceDB, DatasetDB, DatasetNamespaces
+from artiq.master.results import ResultStore
 from artiq.master.scheduler import Scheduler
 from artiq.master.rid_counter import RIDCounter
 from artiq.master.experiments import (FilesystemBackend, GitBackend,
                                       ExperimentDB)
+from artiq.master.worker_managers import WorkerManagerDB
 
 logger = logging.getLogger(__name__)
 
@@ -30,8 +33,9 @@ def get_argparser():
                         help="print the ARTIQ version number")
 
     common_args.simple_network_args(parser, [
-        ("notify", "notifications", 3250),
-        ("control", "control", 3251),
+        ("notify", "notifications", NOTIFY_PORT),
+        ("control", "control", CONTROL_PORT),
+        ("worker_manager", "worker manager", WORKER_MANAGER_PORT),
         ("logging", "remote logging", 1066),
         ("broadcast", "broadcasts", 1067)
     ])
@@ -41,6 +45,11 @@ def get_argparser():
                        help="device database file (default: '%(default)s')")
     group.add_argument("--dataset-db", default="dataset_db.pyon",
                        help="dataset file (default: '%(default)s')")
+    group.add_argument(
+        "--results-root",
+        default="results",
+        help="The root directory for storing results (default: '%(default)s)",
+    )
 
     group = parser.add_argument_group("repository")
     group.add_argument(
@@ -98,21 +107,31 @@ def main():
     dataset_db.start()
     atexit_register_coroutine(dataset_db.stop)
 
+    result_store = ResultStore(args.results_root)
+
     dataset_namespaces = DatasetNamespaces(dataset_db)
     atexit_register_coroutine(dataset_namespaces.stop)
 
     worker_handlers = dict()
+    worker_manager_db = loop.run_until_complete(
+        WorkerManagerDB.create(bind, args.port_worker_manager)
+    )
+    atexit_register_coroutine(worker_manager_db.close)
 
     if args.git:
         repo_backend = GitBackend(args.repository)
     else:
         repo_backend = FilesystemBackend(args.repository)
     experiment_db = ExperimentDB(
-        repo_backend, worker_handlers, args.experiment_subdir)
+        repo_backend, worker_handlers, worker_manager_db,
+        args.experiment_subdir,
+    )
     atexit.register(experiment_db.close)
 
-    scheduler = Scheduler(RIDCounter(), worker_handlers, experiment_db,
-                          dataset_namespaces)
+    scheduler = Scheduler(
+        RIDCounter(), worker_handlers, worker_manager_db, experiment_db,
+        dataset_namespaces,
+    )
     scheduler.start()
     atexit_register_coroutine(scheduler.stop)
 
@@ -129,6 +148,7 @@ def main():
         "scheduler_get_status": scheduler.get_status,
         "scheduler_check_pause": scheduler.check_pause,
         "ccb_issue": ccb_issue,
+        "store_results": result_store.store,
     })
     experiment_db.scan_repository_async()
 

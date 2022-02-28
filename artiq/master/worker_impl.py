@@ -5,7 +5,8 @@ necessary to connect the global artefacts used from experiment code (scheduler,
 device database, etc.) to their actual implementation in the parent master
 process via IPC.
 """
-
+import argparse
+from io import BytesIO
 import sys
 import time
 import os
@@ -32,7 +33,6 @@ from artiq.compiler import import_cache
 from artiq.coredevice.core import CompileError, host_only, _render_diagnostic
 from artiq import __version__ as artiq_version
 
-import logging
 logger = logging.getLogger(__name__)
 
 ipc = None
@@ -308,11 +308,32 @@ def put_exception_report():
     put_object({"action": "exception"})
 
 
-def main():
+_store_results = make_parent_action("store_results")
+
+
+def main(argv=None):
     global ipc
 
-    multiline_log_config(level=int(sys.argv[2]))
-    ipc = pipe_ipc.ChildComm(sys.argv[1])
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--skip-log-config",
+        dest="log_config",
+        default=True,
+        action="store_false",
+    )
+    parser.add_argument(
+        "--skip-import-hook",
+        dest="import_hook",
+        default=True,
+        action="store_false",
+    )
+    parser.add_argument("pipe")
+    parser.add_argument("log_level", type=int)
+    args = parser.parse_args(args=argv)
+
+    if args.log_config:
+        multiline_log_config(level=args.log_level)
+    ipc = pipe_ipc.ChildComm(args.pipe)
 
     start_time = None
     run_time = None
@@ -323,27 +344,32 @@ def main():
     repository_path = None
 
     def write_results():
+        logger.info("Writing results")
+        buf = BytesIO()
         filename = "{:09}-{}.h5".format(rid, exp.__name__)
-        with h5py.File(filename, "w") as f:
+        with h5py.File(filename, "w", driver="fileobj", fileobj=buf) as f:
             dataset_mgr.write_hdf5(f)
             f["artiq_version"] = artiq_version
             f["rid"] = rid
             f["start_time"] = start_time
             f["run_time"] = run_time
             f["expid"] = pyon.encode(expid)
+        _store_results(start_time, filename, buf.getvalue())
 
     device_mgr = DeviceManager(ParentDeviceDB,
                                virtual_devices={"scheduler": Scheduler(),
                                                 "ccb": CCB()})
     dataset_mgr = DatasetManager(ParentDatasetDB)
 
-    import_cache.install_hook()
+    if args.import_hook:
+        import_cache.install_hook()
 
     try:
         while True:
             obj = get_object()
             action = obj["action"]
             if action == "build":
+                logger.info("Starting build")
                 start_time = time.time()
                 rid = obj["rid"]
                 expid = obj["expid"]
@@ -366,11 +392,15 @@ def main():
                 os.chdir(dirname)
                 argument_mgr = ProcessArgumentManager(expid["arguments"])
                 exp_inst = exp((device_mgr, dataset_mgr, argument_mgr, {}))
+                logger.info("Completed build")
                 put_completed()
             elif action == "prepare":
+                logger.info("Starting prepare")
                 exp_inst.prepare()
+                logger.info("Completed prepare")
                 put_completed()
             elif action == "run":
+                logger.info("Starting run")
                 run_time = time.time()
                 try:
                     exp_inst.run()
@@ -379,14 +409,19 @@ def main():
                     # for end of analyze stage.
                     write_results()
                     raise
+                logger.info("Completed run")
                 put_completed()
             elif action == "analyze":
+                logger.info("Starting analyze")
                 try:
                     exp_inst.analyze()
-                    put_completed()
                 finally:
                     write_results()
+                logger.info("Completed analyze")
+                put_completed()
             elif action == "examine":
+                # No logging for examine it's not part of the main worker life
+                # cycle and I think it would get a bit chatty
                 examine(ExamineDeviceMgr, ExamineDatasetMgr, obj["file"])
                 put_completed()
             elif action == "terminate":
