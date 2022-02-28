@@ -107,6 +107,17 @@ async def _plain_dict_subscriber(master, port, notifier, notify_cb):
         await subscriber.close()
 
 
+@asynccontextmanager
+async def _rpc_client(master, control_port, target):
+    master_client = pc_rpc.AsyncioClient()
+    await master_client.connect_rpc(master, control_port, target)
+
+    try:
+        yield master_client
+    finally:
+        master_client.close_rpc()
+
+
 def summarise_mod(mod):
     if mod["action"] == "init":
         return "init"
@@ -116,6 +127,12 @@ def summarise_mod(mod):
         return f"{mod['action']} '{mod['key']}' in {mod['path']}"
     else:
         return f"Unknown action ({mod['action']}"
+
+
+async def _clean_datasets(dataset_client, dataset, rid):
+    for key in dataset:
+        if key.startswith(f"data.{rid}."):
+            dataset_client.delete(key)
 
 
 async def run_experiment(
@@ -182,7 +199,7 @@ async def run_experiment(
         def dataset_cb(mod):
             log.debug(f"Got dataset update {summarise_mod(mod)}")
 
-        (_, dataset, worker_manager) = await asyncio.gather(
+        (_, dataset, worker_manager, dataset_client) = await asyncio.gather(
             stack.enter_async_context(
                 _plain_dict_subscriber(master, notify_port, "schedule", schedule_cb)
             ),
@@ -197,6 +214,9 @@ async def run_experiment(
                     f"{socket.gethostname()}-tests",
                     transport_factory=ThreadWorkerTransport,
                 )
+            ),
+            stack.enter_async_context(
+                _rpc_client(master, control_port, "master_dataset_db"),
             ),
         )
 
@@ -219,6 +239,7 @@ async def run_experiment(
             arguments,
             log_level,
         )
+        stack.push_async_callback(_clean_datasets, dataset_client, dataset, rid)
 
         await complete
 
@@ -238,10 +259,7 @@ async def run_experiment(
 async def _submit_experiment(
     master, control_port, pipeline, manager_id, experiment_class, arguments, log_level
 ):
-    master_client = pc_rpc.AsyncioClient()
-    await master_client.connect_rpc(master, control_port, "master_schedule")
-
-    try:
+    async with _rpc_client(master, control_port, "master_schedule") as master_client:
         expid = {
             "log_level": log_level,
             "file": os.path.abspath(sys.modules[experiment_class.__module__].__file__),
@@ -259,5 +277,3 @@ async def _submit_experiment(
         )
         log.info(f"Started experiment {experiment_class.__qualname__} with {rid}")
         return rid
-    finally:
-        master_client.close_rpc()
