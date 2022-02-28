@@ -129,8 +129,10 @@ class Worker:
 
         This method should always be called by the user to clean up, even if
         build() or examine() raises an exception."""
-        self.closed.set()
-        await self._transport.close(term_timeout, self.rid)
+        try:
+            await self._transport.close(term_timeout, self.rid)
+        finally:
+            self.closed.set()
 
     async def _send(self, obj, cancellable=True):
         line = pyon.encode(obj)

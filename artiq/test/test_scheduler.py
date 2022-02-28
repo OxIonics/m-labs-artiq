@@ -498,7 +498,8 @@ class SchedulerCase(unittest.TestCase):
 
         handlers = {
             "get_dataset": get_dataset,
-            "update_dataset": check_termination
+            "update_dataset": check_termination,
+            "store_results": lambda t, f, d: None,
         }
         scheduler = Scheduler(_RIDCounter(0), handlers, None, None, None)
 
@@ -510,7 +511,7 @@ class SchedulerCase(unittest.TestCase):
         expid_idle = _get_expid("IdleExperiment")
         # Show backtraces from the worker process, shame about SystemExit
         # but the others are potentially very important.
-        expid_idle["log_level"] = logging.WARNING
+        expid_idle["log_level"] = logging.DEBUG
         scheduler.submit("main", expid_idle, 0, None, False)
 
         return scheduler, status_events, flags
