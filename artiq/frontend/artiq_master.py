@@ -114,7 +114,9 @@ def main():
     else:
         repo_backend = FilesystemBackend(args.repository)
     experiment_db = ExperimentDB(
-        repo_backend, worker_handlers, args.experiment_subdir)
+        repo_backend, worker_handlers, worker_manager_db,
+        args.experiment_subdir,
+    )
     atexit.register(experiment_db.close)
 
     scheduler = Scheduler(
