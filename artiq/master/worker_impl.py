@@ -5,6 +5,7 @@ necessary to connect the global artefacts used from experiment code (scheduler,
 device database, etc.) to their actual implementation in the parent master
 process via IPC.
 """
+import argparse
 from io import BytesIO
 import sys
 import time
@@ -310,11 +311,29 @@ def put_exception_report():
 _store_results = make_parent_action("store_results")
 
 
-def main():
+def main(argv=None):
     global ipc
 
-    multiline_log_config(level=int(sys.argv[2]))
-    ipc = pipe_ipc.ChildComm(sys.argv[1])
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--skip-log-config",
+        dest="log_config",
+        default=True,
+        action="store_false",
+    )
+    parser.add_argument(
+        "--skip-import-hook",
+        dest="import_hook",
+        default=True,
+        action="store_false",
+    )
+    parser.add_argument("pipe")
+    parser.add_argument("log_level", type=int)
+    args = parser.parse_args(args=argv)
+
+    if args.log_config:
+        multiline_log_config(level=args.log_level)
+    ipc = pipe_ipc.ChildComm(args.pipe)
 
     start_time = None
     run_time = None
@@ -342,7 +361,8 @@ def main():
                                                 "ccb": CCB()})
     dataset_mgr = DatasetManager(ParentDatasetDB)
 
-    import_cache.install_hook()
+    if args.import_hook:
+        import_cache.install_hook()
 
     try:
         while True:

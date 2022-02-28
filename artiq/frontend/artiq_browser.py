@@ -15,6 +15,7 @@ from sipyco import common_args
 
 from artiq import __version__ as artiq_version
 from artiq import __artiq_dir__ as artiq_dir
+from artiq.consts import CONTROL_PORT
 from artiq.tools import get_user_config_dir
 from artiq.gui import state, applets, models, log
 from artiq.browser import datasets, files, experiments
@@ -39,7 +40,7 @@ def get_argparser():
         help="hostname or IP of the master to connect to "
              "when uploading datasets")
     parser.add_argument(
-        "--port", default=3251, type=int,
+        "--port", default=CONTROL_PORT, type=int,
         help="TCP port to use to connect to the master")
     parser.add_argument("select", metavar="SELECT", nargs="?",
                         help="directory to browse or file to load")
