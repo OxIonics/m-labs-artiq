@@ -10,6 +10,8 @@ on:
 jobs:
   test:
     uses: OxIonics/common-workflows/.github/workflows/test.yml@master
+    secrets:
+      GHA_TOKEN: ${{ secrets.GHA_TOKEN }}
     with:
       TEST_PATH: artiq/test
       INSTALL_ARGS: -E artiq-master -E gui
