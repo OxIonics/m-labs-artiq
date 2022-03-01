@@ -112,7 +112,7 @@ class ThreadWorkerTransport(WorkerTransport):
         self._stopped = False
         self.ipc: Optional[thread_pipe_ipc.AsyncioParentComm] = None
 
-    async def create(self, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
+    async def create(self, rid, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
         install_import_hook()
         # A different uuid from the one we use to identify the worker else where
         # :sad_face:

@@ -220,16 +220,18 @@ class WorkerManagerProxy:
         await self._writer.drain()
 
     async def create_worker(
-            self, worker_id, log_level
+            self, worker_id, rid, log_level
     ) -> Tuple[AsyncIterator, AsyncIterator]:
         state = self._workers[worker_id] = _ManagedWorkerState()
         await self._send({
             "action": "create_worker",
             "worker_id": worker_id,
+            "rid": rid,
             "log_level": log_level,
         })
         await self._writer.drain()
         await state.created
+        log.info(f"Created worker {worker_id} on manager {self._id} (RID {rid})")
 
         return (
             iterate_queue(state.stdout_queue),
@@ -283,8 +285,8 @@ class ManagedWorkerTransport(WorkerTransport):
         self._proxy = proxy
         self._id = id
 
-    async def create(self, log_level) -> Tuple[AsyncIterator, AsyncIterator]:
-        return await self._proxy.create_worker(self._id, log_level)
+    async def create(self, rid, log_level) -> Tuple[AsyncIterator, AsyncIterator]:
+        return await self._proxy.create_worker(self._id, rid, log_level)
 
     async def send(self, msg: str):
         return await self._proxy.worker_msg(self._id, msg)

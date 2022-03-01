@@ -117,7 +117,7 @@ class Worker:
             raise WorkerError("Attempting to create process after close")
         if self._created:
             return  # process already exists, recycle
-        (stdout, stderr) = await self._transport.create(log_level)
+        (stdout, stderr) = await self._transport.create(self.rid, log_level)
 
         self._created = True
         asyncio.create_task(_iterate_logs(self._get_log_source, "stdout", stdout))

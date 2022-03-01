@@ -13,7 +13,9 @@ logger = logging.getLogger(__name__)
 
 class WorkerTransport:
 
-    async def create(self, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
+    async def create(
+            self, rid: str, log_level: int
+    ) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
         raise NotImplementedError()
 
     async def send(self, msg: str):
@@ -22,7 +24,7 @@ class WorkerTransport:
     async def recv(self):
         raise NotImplementedError()
 
-    async def close(self, term_timeout, rid):
+    async def close(self, term_timeout: float, rid: str):
         raise NotImplementedError()
 
 
@@ -36,7 +38,7 @@ class PipeWorkerTransport(WorkerTransport):
     def __init__(self):
         self.ipc = None
 
-    async def create(self, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
+    async def create(self, rid, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
         ipc = pipe_ipc.AsyncioParentComm()
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
@@ -46,7 +48,7 @@ class PipeWorkerTransport(WorkerTransport):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, start_new_session=True)
         self.ipc = ipc
-        logger.debug(f"Created worker process pid={ipc.process.pid}")
+        logger.info(f"Created worker process pid={ipc.process.pid} (RID {rid})")
         return (
             _decode_iter(ipc.process.stdout),
             _decode_iter(ipc.process.stderr),
