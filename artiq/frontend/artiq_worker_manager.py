@@ -1,12 +1,17 @@
 import argparse
 import asyncio
 import logging
+import signal
 import sys
 
 from artiq.consts import WORKER_MANAGER_PORT
 from artiq.master.worker_transport import PipeWorkerTransport
 from artiq.test_tools.thread_worker_transport import ThreadWorkerTransport
 from artiq.worker_manager.worker_manager import GracefulExit, WorkerManager
+
+
+def raise_keyboard_interrupt(_handlers, _frame):
+    raise KeyboardInterrupt("Term")
 
 
 def main():
@@ -56,6 +61,9 @@ def main():
         level=logging.WARNING - args.verbose * 10,
         format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
     )
+
+    # Treat SIGTERM the same as SIGINT
+    signal.signal(signal.SIGTERM, raise_keyboard_interrupt)
 
     if args.thread_worker:
         transport_factory = ThreadWorkerTransport

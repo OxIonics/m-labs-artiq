@@ -112,11 +112,11 @@ async def start_local_worker_manager(args):
     process = await asyncio.create_subprocess_exec(*cmd)
 
     async def stop_local_worker_manager():
-        process.send_signal(signal.SIGINT)
+        process.terminate()
         try:
             await asyncio.wait_for(process.wait(), 5)
         except asyncio.TimeoutError:
-            logging.error("Local worker manager didn't exit from sigint")
+            logging.error("Local worker manager didn't exit from terminate")
             process.kill()
 
     atexit_register_coroutine(stop_local_worker_manager)
