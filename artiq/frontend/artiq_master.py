@@ -168,7 +168,8 @@ def main():
         "devices": device_db.data,
         "datasets": dataset_db.data,
         "explist": experiment_db.explist,
-        "explist_status": experiment_db.status
+        "explist_status": experiment_db.status,
+        "worker_managers": worker_manager_db.notifier,
     })
     dataset_namespaces.set_publisher(server_notify)
     loop.run_until_complete(server_notify.start(
