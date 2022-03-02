@@ -308,7 +308,7 @@ class WorkerManager:
         worker_id = obj["worker_id"]
         log.info(f"Creating worker {worker_id}")
         worker = self._transport_factory()
-        (stdout, stderr) = await worker.create(obj["log_level"])
+        (stdout, stderr) = await worker.create(obj["rid"], obj["log_level"])
 
         msg_task = asyncio.create_task(self._process_worker_msgs(worker_id, worker))
         stdout_task = asyncio.create_task(self._process_worker_output(worker_id, "worker_stdout", stdout))

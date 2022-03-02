@@ -63,7 +63,7 @@ class FakeWorkerTransport(WorkerTransport):
     def __init__(self):
         self.worker = FakeWorker()
 
-    async def create(self, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
+    async def create(self, rid, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
         return (
             iterate_queue(self.worker.stdout_queue),
             iterate_queue(self.worker.stderr_queue)
@@ -127,7 +127,7 @@ class ConnectedWorker:
 @pytest.fixture()
 async def worker_pair(worker_manager_db, worker_manager):
     transport = worker_manager_db.get_transport(worker_manager.id)
-    (stdout, stderr) = await transport.create(logging.DEBUG)
+    (stdout, stderr) = await transport.create("test", logging.DEBUG)
     worker = worker_manager._workers[transport._id].transport.worker
     return ConnectedWorker(transport, worker, stdout, stderr)
 
@@ -208,7 +208,7 @@ async def test_worker_manager_connection(worker_manager_db, worker_manager_port)
 async def test_worker_manager_create_worker(worker_manager_db, worker_manager):
     transport = worker_manager_db.get_transport(worker_manager.id)
 
-    await wait_for(transport.create(logging.DEBUG))
+    await wait_for(transport.create("test", logging.DEBUG))
 
     assert worker_manager._workers.keys() == {transport._id}
 
