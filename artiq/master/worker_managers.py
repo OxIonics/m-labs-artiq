@@ -17,13 +17,14 @@ log = logging.getLogger(__name__)
 class WorkerManagerDB:
 
     @classmethod
-    async def create(cls, host, port) -> WorkerManagerDB:
+    async def create(cls, host, port, limit=8 * 1024 * 1024) -> WorkerManagerDB:
         async def handle_connection(reader, writer):
             await instance.handle_connection(reader, writer)
 
         server = await asyncio.start_server(
             handle_connection,
             host, port,
+            limit=limit,
         )
         instance = cls(server)
         return instance
