@@ -81,7 +81,10 @@ def main():
 
     buf = source.Buffer("".join(fileinput.input()).expandtabs(),
                         os.path.basename(fileinput.filename()))
-    parsed, comments = parse_buffer(buf, engine=engine)
+    version = sys.version_info[0:2]
+    if version >= (3, 6):
+        version = (3, 6)
+    parsed, comments = parse_buffer(buf, engine=engine, version=version)
     typed = ASTTypedRewriter(engine=engine, prelude=prelude.globals()).visit(parsed)
     Inferencer(engine=engine).visit(typed)
     ConstnessValidator(engine=engine).visit(typed)

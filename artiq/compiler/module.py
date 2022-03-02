@@ -9,6 +9,8 @@ string and infers types for it using a trivial :module:`prelude`.
 """
 
 import os
+import sys
+
 from pythonparser import source, diagnostic, parse_buffer
 from . import prelude, types, transforms, analyses, validators, embedding
 
@@ -25,7 +27,10 @@ class Source:
                                                         prelude=prelude.globals())
         inferencer = transforms.Inferencer(engine=engine)
 
-        self.parsetree, self.comments = parse_buffer(source_buffer, engine=engine)
+        version = sys.version_info[0:2]
+        if version >= (3, 6):
+            version = (3, 6)
+        self.parsetree, self.comments = parse_buffer(source_buffer, engine=engine, version=version)
         self.typedtree = asttyped_rewriter.visit(self.parsetree)
         self.globals = asttyped_rewriter.globals
         inferencer.visit(self.typedtree)

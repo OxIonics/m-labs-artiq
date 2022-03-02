@@ -67,6 +67,9 @@ sphinxcontrib-wavedrom = {version = "^3.0.2", optional = true}
 [tool.poetry.dev-dependencies]
 pytest = "^6.2.5"
 pytest-asyncio = "^0.18.1"
+lit = "^14.0.0"
+outputcheck = "^0.4.1"
+flake8 = "^4.0.1"
 
 [tool.poetry-dynamic-versioning]
 enable = true
@@ -91,3 +94,11 @@ build-docs = ["sphinx", "sphinx_rtd_theme", "sphinx-argparse", "sphinxcontrib-wa
 artiq-master = ["pygit2", "pythonparser", "python-levenshtein", "migen", "misoc", "llvmlite"]
 # Needed for running ARTIQ dashboard
 gui = ["pyqt5", "pyqt5-qt5", "pyqt5-sip", "pyqtgraph", "qasync"]
+
+[tool.poe.tasks]
+lit-prep = "rustc artiq/test/libartiq_support/lib.rs -Cpanic=unwind -g"
+[tool.poe.tasks.lit]
+shell = "LIBARTIQ_SUPPORT=$POE_ROOT/libartiq_support.so lit -v $path"
+[tool.poe.tasks.lit.args.path]
+positional = true
+default = "artiq/test/lit"
