@@ -6,8 +6,10 @@ device database, etc.) to their actual implementation in the parent master
 process via IPC.
 """
 import argparse
-from io import BytesIO
+import base64
+import io
 import sys
+from tempfile import SpooledTemporaryFile
 import time
 import os
 import inspect
@@ -20,6 +22,7 @@ import h5py
 from sipyco import pipe_ipc, pyon
 from sipyco.packed_exceptions import raise_packed_exc
 from sipyco.logging_tools import multiline_log_config
+import zlib
 
 import artiq
 from artiq import tools
@@ -311,6 +314,21 @@ def put_exception_report():
 _store_results = make_parent_action("store_results")
 
 
+def _compressed_blocks(tmpf, min_output_size=1024 * 1024):
+    buf = io.BytesIO()
+    compress = zlib.compressobj()
+    for block in iter(lambda: tmpf.read(4 * 1024), b""):
+        buf.write(compress.compress(block))
+        if buf.tell() > min_output_size:
+            buf.write(compress.flush())
+            yield buf.getvalue()
+            buf = io.BytesIO()
+            compress = zlib.compressobj()
+    buf.write(compress.flush())
+    if buf.tell() > 0:
+        yield buf.getvalue()
+
+
 def main(argv=None):
     global ipc
 
@@ -344,17 +362,23 @@ def main(argv=None):
     repository_path = None
 
     def write_results():
-        logger.info("Writing results")
-        buf = BytesIO()
-        filename = "{:09}-{}.h5".format(rid, exp.__name__)
-        with h5py.File(filename, "w", driver="fileobj", fileobj=buf) as f:
-            dataset_mgr.write_hdf5(f)
-            f["artiq_version"] = artiq_version
-            f["rid"] = rid
-            f["start_time"] = start_time
-            f["run_time"] = run_time
-            f["expid"] = pyon.encode(expid)
-        _store_results(start_time, filename, buf.getvalue())
+        with SpooledTemporaryFile(max_size=20 * 1024 * 1024) as tmpf:
+            filename = "{:09}-{}.h5".format(rid, exp.__name__)
+            with h5py.File(filename, "w", driver="fileobj", fileobj=tmpf) as f:
+                dataset_mgr.write_hdf5(f)
+                f["artiq_version"] = artiq_version
+                f["rid"] = rid
+                f["start_time"] = start_time
+                f["run_time"] = run_time
+                f["expid"] = pyon.encode(expid)
+
+            tmpf.seek(0, io.SEEK_END)
+            logger.info(f"Sending results total size {tmpf.tell()}B")
+
+            tmpf.seek(0)
+
+            for block in _compressed_blocks(tmpf):
+                _store_results(start_time, filename, base64.b64encode(block))
 
     device_mgr = DeviceManager(ParentDeviceDB,
                                virtual_devices={"scheduler": Scheduler(),
