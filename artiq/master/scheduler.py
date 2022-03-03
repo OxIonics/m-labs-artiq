@@ -7,6 +7,7 @@ from functools import partial
 from sipyco.sync_struct import Notifier, process_mod
 from sipyco.asyncio_tools import TaskObject, Condition
 
+from artiq.master.experiments import ExperimentDB
 from artiq.master.worker import (Worker, log_worker_exception, ResumeAction,
                                  RunResult)
 from artiq.master.worker_managers import WorkerManagerDB
@@ -137,22 +138,23 @@ class RunPool:
         self.ridc = ridc
         self.worker_handlers = worker_handlers
         self.notifier = notifier
-        self.experiment_db = experiment_db
+        self.experiment_db: ExperimentDB = experiment_db
         self.dataset_namespaces = dataset_namespaces
 
-    def submit(self, expid, priority, due_date, flush, pipeline_name, worker_transport):
+    def submit(self, expid, priority, due_date, flush, pipeline_name):
         # mutates expid to insert head repository revision if None.
         # called through scheduler.
         rid = self.ridc.get()
+        repo = self.experiment_db.get_repo(expid.get("worker_manger_id"))
         if "repo_rev" in expid:
             if expid["repo_rev"] is None:
-                expid["repo_rev"] = self.experiment_db.cur_rev
-            wd, repo_msg = self.experiment_db.repo_backend.request_rev(
-                expid["repo_rev"])
+                expid["repo_rev"] = repo.cur_rev
+            wd, repo_msg = repo.request_rev(expid["repo_rev"])
         else:
             wd, repo_msg = None, None
         run = Run(rid, pipeline_name, wd, expid, priority, due_date, flush,
-                  self, worker_transport, repo_msg=repo_msg)
+                  self, repo.get_worker_transport(),
+                  repo_msg=repo_msg)
         self.runs[rid] = run
         self.state_changed.notify()
         return rid
@@ -164,7 +166,8 @@ class RunPool:
         run = self.runs[rid]
         await run.close()
         if "repo_rev" in run.expid:
-            self.experiment_db.repo_backend.release_rev(run.expid["repo_rev"])
+            repo = self.experiment_db.get_repo(run.expid.get("worker_manger_id"))
+            repo.release_rev(run.expid["repo_rev"])
         del self.runs[rid]
 
 
@@ -552,7 +555,6 @@ class Scheduler:
             self,
             ridc,
             worker_handlers,
-            worker_manager_db: WorkerManagerDB,
             experiment_db,
             dataset_namespaces,
     ):
@@ -561,7 +563,6 @@ class Scheduler:
         self._pipelines = dict()
         self._worker_handlers = worker_handlers
         self._experiment_db = experiment_db
-        self._worker_manager_db = worker_manager_db
         self._dataset_namespaces = dataset_namespaces
         self._terminated = False
 
@@ -600,13 +601,8 @@ class Scheduler:
                                 self._experiment_db, self._dataset_namespaces)
             self._pipelines[pipeline_name] = pipeline
             pipeline.start()
-        worker_manager_id = expid.get("worker_manager_id")
-        if worker_manager_id is None:
-            worker_transport = PipeWorkerTransport()
-        else:
-            worker_transport = self._worker_manager_db.get_transport(worker_manager_id)
         return pipeline.pool.submit(
-            expid, priority, due_date, flush, pipeline_name, worker_transport,
+            expid, priority, due_date, flush, pipeline_name,
         )
 
     def delete(self, rid):

@@ -6,6 +6,30 @@ from time import time, sleep
 
 from artiq.experiment import *
 from artiq.master.scheduler import Scheduler
+from artiq.master.worker_transport import PipeWorkerTransport
+
+
+class DummyExperimentRepo:
+
+    def get_worker_transport(self):
+        # Would like to use ThreadWorkerTransport here, but some of these tests
+        # seem to rely on killing the process.
+        return PipeWorkerTransport()
+
+    def request_rev(self, rev):
+        pass
+
+    def release_rev(self, rev):
+        pass
+
+
+class DummyExperimentDB:
+
+    def __init__(self):
+        self._repo = DummyExperimentRepo()
+
+    def get_repo(self, worker_manager_id):
+        return self._repo
 
 
 class EmptyExperiment(EnvExperiment):
@@ -119,9 +143,16 @@ class SchedulerCase(unittest.TestCase):
     def run_async(self, coro, timeout=1):
         return self.loop.run_until_complete(asyncio.wait_for(coro, timeout=timeout))
 
+    def make_scheduler(self, handlers=None):
+        if handlers is None:
+            handlers = {
+                "store_results": lambda t, f, d: None,
+            }
+        return Scheduler(_RIDCounter(0), handlers, DummyExperimentDB(), None)
+
     def test_steps(self):
         loop = self.loop
-        scheduler = Scheduler(_RIDCounter(0), dict(), None, None, None)
+        scheduler = self.make_scheduler()
         expid = _get_expid("EmptyExperiment")
 
         expect = _get_basic_steps(1, expid)
@@ -158,9 +189,8 @@ class SchedulerCase(unittest.TestCase):
     def test_pending_priority(self):
         """Check due dates take precedence over priorities when waiting to
         prepare."""
-        loop = self.loop
         handlers = {}
-        scheduler = Scheduler(_RIDCounter(0), handlers, None, None, None)
+        scheduler = self.make_scheduler(handlers)
         handlers["scheduler_check_pause"] = scheduler.check_pause
 
         expid_empty = _get_expid("EmptyExperiment")
@@ -306,9 +336,9 @@ class SchedulerCase(unittest.TestCase):
         scheduler.submit("main", expid_empty, high_priority, late)
         scheduler.submit("main", expid_empty, middle_priority, early)
 
-        loop.run_until_complete(done.wait())
+        self.run_async(done.wait(), timeout=5)
         scheduler.notifier.publish = None
-        loop.run_until_complete(scheduler.stop())
+        self.run_async(scheduler.stop())
 
     def test_pause(self):
         loop = self.loop
@@ -322,9 +352,10 @@ class SchedulerCase(unittest.TestCase):
                  "value": (False, True), "path": []})
             termination_ok = True
         handlers = {
-            "update_dataset": check_termination
+            "store_result": lambda t, f, d: None,
+            "update_dataset": check_termination,
         }
-        scheduler = Scheduler(_RIDCounter(0), handlers, None, None, None)
+        scheduler = self.make_scheduler(handlers)
 
         expid_bg = _get_expid("BackgroundExperiment")
         expid = _get_expid("EmptyExperiment")
@@ -383,7 +414,7 @@ class SchedulerCase(unittest.TestCase):
         """Check scheduler exits with experiments still running"""
         loop = self.loop
 
-        scheduler = Scheduler(_RIDCounter(0), {}, None, None, None)
+        scheduler = self.make_scheduler()
 
         expid_bg = _get_expid("BackgroundExperiment")
         # Suppress the SystemExit backtrace when worker process is killed.
@@ -424,7 +455,7 @@ class SchedulerCase(unittest.TestCase):
 
     def test_flush(self):
         loop = self.loop
-        scheduler = Scheduler(_RIDCounter(0), dict(), None, None, None)
+        scheduler = self.make_scheduler()
         expid = _get_expid("EmptyExperiment")
 
         expect = _get_basic_steps(1, expid, 1, True)
@@ -501,7 +532,7 @@ class SchedulerCase(unittest.TestCase):
             "update_dataset": check_termination,
             "store_results": lambda t, f, d: None,
         }
-        scheduler = Scheduler(_RIDCounter(0), handlers, None, None, None)
+        scheduler = self.make_scheduler(handlers)
 
         status_events, notify = self._make_status_events(0)
         scheduler.notifier.publish = notify
@@ -540,7 +571,6 @@ class SchedulerCase(unittest.TestCase):
 
     def test_resume_idle(self):
         """Check scheduler resumes previously idle experiments"""
-        loop = self.loop
         scheduler, status_events, flags = self._make_scheduler_for_idle_test()
         self.run_async(status_events["running"].wait())
 
