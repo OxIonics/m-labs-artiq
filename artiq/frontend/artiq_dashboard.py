@@ -172,8 +172,8 @@ def main():
         disconnect_reported = True
 
     sub_clients = dict()
-    for notifier_name, modelf in (("explist", explorer.Model),
-                                  ("explist_status", explorer.StatusUpdater),
+    for notifier_name, modelf in (("all_explist", explorer.AllExpListModel),
+                                  ("all_explist_status", explorer.AllStatusUpdater),
                                   ("datasets", datasets.Model),
                                   ("schedule", schedule.Model)):
         subscriber = ModelSubscriber(notifier_name, modelf,
@@ -202,7 +202,7 @@ def main():
     # create UI components
     expmgr = experiments.ExperimentManager(main_window,
                                            sub_clients["datasets"],
-                                           sub_clients["explist"],
+                                           sub_clients["all_explist"],
                                            sub_clients["schedule"],
                                            rpc_clients["schedule"],
                                            rpc_clients["experiment_db"],
@@ -211,8 +211,8 @@ def main():
     d_shortcuts = shortcuts.ShortcutsDock(main_window, expmgr)
     smgr.register(d_shortcuts)
     d_explorer = explorer.ExplorerDock(expmgr, d_shortcuts,
-                                       sub_clients["explist"],
-                                       sub_clients["explist_status"],
+                                       sub_clients["all_explist"],
+                                       sub_clients["all_explist_status"],
                                        rpc_clients["schedule"],
                                        rpc_clients["experiment_db"],
                                        rpc_clients["device_db"])

@@ -531,8 +531,9 @@ class _QuickOpenDialog(QtWidgets.QDialog):
         # Find matching experiment names. Open experiments are preferred to
         # matches from the repository to ease quick window switching.
         open_exps = list(self.manager.open_experiments.keys())
+        # TODO: Select active explist, handle active explist is None
         repo_exps = set("repo:" + k
-                        for k in self.manager.explist.keys()) - set(open_exps)
+                        for k in self.manager.explist[None].keys()) - set(open_exps)
         choices = [(o, 100) for o in open_exps] + [(r, 0) for r in repo_exps]
 
         self.select_widget = FuzzySelectWidget(choices)
@@ -618,7 +619,7 @@ class ExperimentManager:
             worker_manager_id = parsed.hostname
             urlpath = urlpath[1:]
         if parsed.scheme == "repo":
-            expinfo = self.explist[urlpath]
+            expinfo = self.explist[worker_manager_id][urlpath]
             file = expinfo["file"]
             class_name = expinfo["class_name"]
             repository = True
@@ -635,7 +636,8 @@ class ExperimentManager:
     def get_argument_editor_class(self, expurl):
         ui_name = self.argument_ui_names.get(expurl, None)
         if not ui_name and expurl[:5] == "repo:":
-            ui_name = self.explist.get(expurl[5:], {}).get("argument_ui", None)
+            # TODO: extract worker_id from expurl
+            ui_name = self.explist[None].get(expurl[5:], {}).get("argument_ui", None)
         if ui_name:
             result = self.argument_ui_classes.get(ui_name, None)
             if result:
@@ -655,7 +657,8 @@ class ExperimentManager:
                 "flush": False
             }
             if expurl[:5] == "repo:":
-                scheduling.update(self.explist[expurl[5:]]["scheduler_defaults"])
+                # TODO: extract worker_id from expurl
+                scheduling.update(self.explist[None][expurl[5:]]["scheduler_defaults"])
             self.submission_scheduling[expurl] = scheduling
             return scheduling
 
@@ -693,7 +696,8 @@ class ExperimentManager:
             if expurl[:5] != "repo:":
                 raise ValueError("Submission arguments must be preinitialized "
                                  "when not using repository")
-            class_desc = self.explist[expurl[5:]]
+            # TODO: extract worker_id from expurl
+            class_desc = self.explist[None][expurl[5:]]
             return self.initialize_submission_arguments(expurl,
                 class_desc["arginfo"], class_desc.get("argument_ui", None))
 

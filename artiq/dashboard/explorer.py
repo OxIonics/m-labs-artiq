@@ -2,12 +2,13 @@ import asyncio
 import logging
 import re
 from functools import partial
+from typing import Generic, Optional, TypeVar
 
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QFileDialog
 
 from artiq.gui.tools import LayoutWidget
-from artiq.gui.models import DictSyncTreeSepModel
+from artiq.gui.models import DictSyncModel, DictSyncTreeSepModel
 from artiq.gui.waitingspinnerwidget import QtWaitingSpinner
 
 
@@ -114,13 +115,86 @@ class _OpenFileDialog(QtWidgets.QDialog):
                 QtWidgets.QDialog.accept(self)
 
 
-class Model(DictSyncTreeSepModel):
+Model = TypeVar("Model")
+
+
+class ActiveWorkerManagerModel(Generic[Model]):
+
+    def __init__(self, init):
+        self.backing_store = init
+        self._active_worker_manager_id: Optional[str] = None
+        self._active_model: Optional[Model] = None
+        self._on_model_change_cbs = []
+        self.set_active_worker_manager(None)
+
+    def set_active_worker_manager(self, worker_manager_id):
+        self._active_worker_manager_id = worker_manager_id
+        try:
+            data = self.backing_store[worker_manager_id]
+        except KeyError:
+            model = None
+        else:
+            model = self._make_model(data)
+        self._set_model(model)
+
+    def _make_model(self, data) -> Model:
+        raise NotImplementedError()
+
+    def _set_model(self, model: Optional[Model]):
+        self._active_model = model
+
+    @property
+    def active_model(self) -> Model:
+        return self._active_model
+
+    def __getitem__(self, key):
+        if key == self._active_worker_manager_id:
+            if self._active_model is None:
+                raise KeyError(key)
+            return self._active_model
+        else:
+            return self.backing_store[key]
+
+    def __setitem__(self, key, value):
+        self.backing_store[key] = value
+        if key == self._active_worker_manager_id:
+            self._set_model(self._make_model(value))
+
+    def __delitem__(self, key):
+        del self.backing_store[key]
+        if key == self._active_worker_manager_id:
+            self._set_model(None)
+
+
+class ExpListModel(DictSyncTreeSepModel):
     def __init__(self, init):
         DictSyncTreeSepModel.__init__(self, "/", ["Experiment"], init)
 
     def convert_tooltip(self, k, v, column):
         return ("<b>File:</b> {file}<br><b>Class:</b> {cls}"
                 .format(file=v["file"], cls=v["class_name"]))
+
+
+class AllExpListModel(ActiveWorkerManagerModel[ExpListModel]):
+
+    def __init__(self, init):
+        self._on_model_change_cbs = []
+        super().__init__(init)
+
+    def add_model_change_cb(self, cb):
+        self._on_model_change_cbs.append(cb)
+
+    def _set_model(self, model):
+        super()._set_model(model)
+        for cb in self._on_model_change_cbs:
+            cb()
+
+    def _make_model(self, data):
+        return ExpListModel(data)
+
+    @property
+    def active_explist(self):
+        return self.backing_store[self._active_worker_manager_id]
 
 
 class StatusUpdater:
@@ -140,6 +214,28 @@ class StatusUpdater:
                 self.explorer.update_scanning(v)
             elif k == "cur_rev":
                 self.explorer.update_cur_rev(v)
+
+
+class AllStatusUpdater(ActiveWorkerManagerModel[StatusUpdater]):
+
+    def __init__(self, init):
+        self.explorer = None
+        super().__init__(init)
+
+    def set_explorer(self, explorer):
+        self.explorer = explorer
+        if self._active_model is not None:
+            self._active_model.set_explorer(explorer)
+
+    def _set_model(self, model):
+        if self._active_model is not None:
+            self._active_model.explorer = None
+        super()._set_model(model)
+        if self._active_model is not None and self.explorer is not None:
+            self._active_model.set_explorer(self.explorer)
+
+    def _make_model(self, data):
+        return StatusUpdater(data)
 
 
 class WaitingPanel(LayoutWidget):
@@ -208,7 +304,7 @@ class ExplorerDock(QtWidgets.QDockWidget):
         submit.clicked.connect(
             partial(self.expname_action, "submit"))
 
-        self.explist_model = Model(dict())
+        self.explist_model = AllExpListModel(dict())
         explist_sub.add_setmodel_callback(self.set_model)
 
         self.el.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
@@ -286,14 +382,19 @@ class ExplorerDock(QtWidgets.QDockWidget):
         if fn:
             asyncio.create_task(self.exp_manager.open_local_file(fn))
 
-    def set_model(self, model):
+    def set_model(self, model: AllExpListModel):
+        # TODO: handle active_model is None, see update_scanning below.
+        def on_model_change():
+            self.el.setModel(model.active_model)
+
         self.explist_model = model
-        self.el.setModel(model)
+        self.el.setModel(model.active_model)
+        model.add_model_change_cb(on_model_change)
 
     def _get_selected_expname(self):
         selection = self.el.selectedIndexes()
         if selection:
-            return self.explist_model.index_to_key(selection[0])
+            return self.explist_model.active_model.index_to_key(selection[0])
         else:
             return None
 
