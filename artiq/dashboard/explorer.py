@@ -7,6 +7,7 @@ from typing import Generic, Optional, TypeVar
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QFileDialog
 
+from artiq.dashboard.experiments import make_url
 from artiq.gui.tools import LayoutWidget
 from artiq.gui.models import DictSyncModel, DictSyncTreeSepModel
 from artiq.gui.waitingspinnerwidget import QtWaitingSpinner
@@ -426,7 +427,6 @@ class ExplorerDock(QtWidgets.QDockWidget):
             asyncio.create_task(self.exp_manager.open_local_file(fn))
 
     def set_model(self, model: AllExpListModel):
-        # TODO: handle active_model is None, see update_scanning below.
         def on_model_change():
             self.el.setModel(model.active_model)
 
@@ -453,7 +453,7 @@ class ExplorerDock(QtWidgets.QDockWidget):
         expname = self._get_selected_expname()
         if expname is not None:
             action = getattr(self.exp_manager, action)
-            action("repo:" + expname)
+            action(make_url("repo", self.active_worker_manager_id, expname))
 
     def set_shortcut(self, nr):
         expname = self._get_selected_expname()
