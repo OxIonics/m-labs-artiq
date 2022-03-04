@@ -172,7 +172,7 @@ def main():
         nonlocal disconnect_reported
         if not disconnect_reported:
             logging.error("connection to master lost, "
-                          "restart dashboard to reconnect")
+                          "restart dashboard to reconnect", exc_info=True)
         disconnect_reported = True
 
     sub_clients = dict()
