@@ -253,9 +253,9 @@ class ExperimentDB:
     async def scan_repository(self, new_cur_rev=None, worker_manager_id=None):
         return await self.get_repo(worker_manager_id).scan_repository(new_cur_rev)
 
-    def scan_repository_async(self, new_cur_rev=None, worker_maanger_id=None):
+    def scan_repository_async(self, new_cur_rev=None, worker_manager_id=None):
         asyncio.ensure_future(
-            exc_to_warning(self.scan_repository(new_cur_rev, worker_maanger_id)))
+            exc_to_warning(self.scan_repository(new_cur_rev, worker_manager_id)))
 
     async def examine(
             self, filename, use_repository=True, revision=None,
@@ -277,6 +277,9 @@ class RepositoryVersion:
 
     def get_worker_transport(self) -> WorkerTransport:
         raise NotImplementedError()
+
+    def get_msg(self):
+        return None
 
 
 class LocalScanMixin(RepositoryVersion):
@@ -366,6 +369,9 @@ class _GitCheckout(LocalScanMixin):
 
     def get_working_dir(self):
         return self.path
+
+    def get_msg(self):
+        return self.message
 
     def __str__(self):
         return f"{self.path}@{self.rev}"
