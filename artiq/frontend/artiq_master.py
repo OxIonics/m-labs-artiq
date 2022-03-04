@@ -129,7 +129,7 @@ def main():
     atexit.register(experiment_db.close)
 
     scheduler = Scheduler(
-        RIDCounter(), worker_handlers, worker_manager_db, experiment_db,
+        RIDCounter(), worker_handlers, experiment_db,
         dataset_namespaces,
     )
     scheduler.start()
@@ -167,8 +167,10 @@ def main():
         "schedule": scheduler.notifier,
         "devices": device_db.data,
         "datasets": dataset_db.data,
-        "explist": experiment_db.explist,
-        "explist_status": experiment_db.status
+        "explist": experiment_db.local_explist,
+        "explist_status": experiment_db.local_status,
+        "all_explist": experiment_db.all_explist,
+        "all_explist_status": experiment_db.all_status,
     })
     dataset_namespaces.set_publisher(server_notify)
     loop.run_until_complete(server_notify.start(

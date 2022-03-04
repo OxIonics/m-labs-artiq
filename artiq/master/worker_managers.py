@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import AsyncIterator, Callable, Dict, Tuple
+from typing import AsyncIterator, Callable, Dict, List, Tuple
 import uuid
 
 from sipyco import pyon
@@ -52,29 +52,25 @@ class WorkerManagerDB:
             )
 
         manager_id = hello["manager_id"]
-        description = hello["manager_description"]
-        log.info(
-            f"New worker manager connection id={manager_id} description={description}"
-        )
-        self._worker_managers[manager_id] = WorkerManagerProxy(
+        mgr = self._worker_managers[manager_id] = WorkerManagerProxy(
             manager_id,
-            description,
+            hello,
             reader,
             writer,
             lambda: self._worker_managers.pop(manager_id, None)
         )
+        log.info(
+            f"New worker manager connection id={manager_id} description={mgr.description}"
+        )
 
-    def get_transport(self, worker_manager_id):
+    def get_proxy(self, worker_manager_id) -> WorkerManagerProxy:
         try:
-            proxy = self._worker_managers[worker_manager_id]
+            return self._worker_managers[worker_manager_id]
         except KeyError:
             raise ValueError(f"Unknown worker_manager_id {worker_manager_id}")
-        id_ = str(uuid.uuid4())
-        log.debug(f"New worker transport {id_} in manager {worker_manager_id}")
-        return ManagedWorkerTransport(
-            proxy,
-            id_,
-        )
+
+    def get_transport(self, worker_manager_id):
+        return self.get_proxy(worker_manager_id).get_transport()
 
     async def close(self):
         self._server.close()
@@ -117,15 +113,33 @@ class WorkerManagerProxy:
         "worker_closed",
         "worker_error",
     }
+    scan_messages = {
+        "scan_result",
+        "scan_failed",
+    }
 
-    def __init__(self, id_, description, reader, writer, detach):
+    def __init__(self, id_, hello, reader, writer, detach):
         self._id = id_
-        self._description = description
+        self.description = hello["manager_description"]
+        self.repo_root = hello["repo_root"]
         self._reader: asyncio.StreamReader = reader
         self._writer: asyncio.StreamWriter = writer
         self._run_task = asyncio.create_task(self._run())
         self._workers: Dict[str, _ManagedWorkerState] = {}
-        self._detach: Callable[[], None] = detach
+        self._inprogress_scans: Dict[str, asyncio.Future] = {}
+        self._on_close: List[Callable[[], None]] = [detach]
+
+    @property
+    def id(self):
+        return self._id
+
+    def get_transport(self):
+        id_ = str(uuid.uuid4())
+        log.debug(f"New worker transport {id_} in manager {self._id}")
+        return ManagedWorkerTransport(
+            self,
+            id_,
+        )
 
     async def _run(self):
         try:
@@ -138,6 +152,8 @@ class WorkerManagerProxy:
 
                 if action in self.worker_messages:
                     self._worker_action(obj)
+                elif action in self.scan_messages:
+                    self._scan_action(obj)
                 else:
                     raise RuntimeError(f"Unexpected action {action}")
         except asyncio.CancelledError:
@@ -153,7 +169,8 @@ class WorkerManagerProxy:
             await self._close()
 
     async def _close(self):
-        self._detach()
+        for cb in self._on_close:
+            cb()
         workers = list(self._workers.values())
         self._workers.clear()
         for worker in workers:
@@ -163,6 +180,10 @@ class WorkerManagerProxy:
                 ))
             if not worker.closed.done():
                 worker.closed.set_result(None)
+        for scan_future in self._inprogress_scans.values():
+            scan_future.set_exception(RuntimeError(
+                "Worker proxy closed during scan",
+            ))
         if workers:
             (_, pending) = await asyncio.wait(
                 [worker.recv_queue.put("") for worker in workers] +
@@ -269,8 +290,29 @@ class WorkerManagerProxy:
             "term_timeout": term_timeout,
             "rid": rid,
         })
-        await self._writer.drain()
         await self._workers[worker_id].closed
+
+    async def scan_dir(self, path):
+        scan_id = str(uuid.uuid4())
+        future = asyncio.get_event_loop().create_future()
+        self._inprogress_scans[scan_id] = future
+        await self._send({
+            "action": "scan_dir",
+            "scan_id": scan_id,
+            "path": path,
+        })
+        return await future
+
+    def _scan_action(self, obj):
+        action = obj["action"]
+        scan_id = obj["scan_id"]
+        future = self._inprogress_scans.pop(scan_id)
+        if action == "scan_result":
+            future.set_result(obj)
+        elif action == "scan_failed":
+            future.set_exception(RuntimeError(obj["msg"]))
+        else:
+            raise RuntimeError(f"Unexpected scan action {action}")
 
     async def close(self):
         self._run_task.cancel()
@@ -278,6 +320,9 @@ class WorkerManagerProxy:
             await self._run_task
         except asyncio.CancelledError:
             pass
+
+    def add_on_close(self, cb):
+        self._on_close.append(cb)
 
 
 class ManagedWorkerTransport(WorkerTransport):

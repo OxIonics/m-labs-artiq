@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from contextlib import asynccontextmanager
 import logging
+import os
 import socket
 from typing import AsyncIterator, Awaitable, Dict, Callable, Iterator, List, Optional
 import uuid
@@ -12,7 +13,7 @@ from sipyco.logging_tools import LogParser
 
 from artiq.consts import WORKER_MANAGER_PORT
 from artiq.master.worker_transport import PipeWorkerTransport, WorkerTransport
-
+from artiq.tools import get_windows_drives
 
 log = logging.getLogger(__name__)
 
@@ -104,7 +105,6 @@ class WorkerManager:
             port=WORKER_MANAGER_PORT,
             manager_id: Optional[str] = None,
             description: Optional[str] = None,
-            transport_factory=PipeWorkerTransport,
             **kwargs
     ) -> WorkerManager:
         """ Create and start the worker manager
@@ -121,17 +121,16 @@ class WorkerManager:
             **kwargs: More kw only arguments passed to the `WorkerManager
                 constructor
         """
-        if manager_id is None:
-            manager_id = str(uuid.uuid4())
-        if description is None:
-            description = socket.gethostname()
-        logging.info(f"Connecting to {host}:{port} with id {manager_id}")
+        logging.debug(f"Connecting to {host}:{port}")
         reader, writer = await asyncio.open_connection(host, port)
         instance = cls(
             manager_id, description, reader, writer,
-            transport_factory, **kwargs,
+            **kwargs,
         )
-        logging.info(f"Connected, starting processors and sending hello")
+        logging.info(
+            f"Connected to {host}:{port} with id {instance.id}, "
+            f"starting processors and sending hello",
+        )
         instance.start()
         await instance.send_hello()
         return instance
@@ -151,8 +150,17 @@ class WorkerManager:
 
     def __init__(
             self, worker_manager_id, description, reader, writer,
-            transport_factory, *, exit_on_idle=False,
+            *,
+            transport_factory=PipeWorkerTransport,
+            exit_on_idle=False,
+            repo_root=None,
     ):
+        if worker_manager_id is None:
+            worker_manager_id = str(uuid.uuid4())
+        if description is None:
+            description = socket.gethostname()
+        if repo_root is None:
+            repo_root = os.getcwd()
         self._id = worker_manager_id
         self._description = description
         self._reader: asyncio.StreamReader = reader
@@ -162,6 +170,7 @@ class WorkerManager:
         self._workers: Dict[str, _WorkerState] = {}
         self._new_worker = asyncio.Queue(10)
         self._exit_on_idle = exit_on_idle
+        self._repo_root = repo_root
         self.stop_request = asyncio.Event()
 
     @property
@@ -176,7 +185,8 @@ class WorkerManager:
         await self._send({
             "action": "hello",
             "manager_id": self._id,
-            "manager_description": self._description
+            "manager_description": self._description,
+            "repo_root": self._repo_root,
         })
 
     def start(self):
@@ -249,6 +259,39 @@ class WorkerManager:
             })
             if self._exit_on_idle and len(self._workers) == 0:
                 raise GracefulExit()
+        elif action == "scan_dir":
+            scan_id = obj["scan_id"]
+            try:
+                files = []
+                dirs = []
+                prefix = ""
+                path = obj["path"]
+                if not path:
+                    if os.name == "nt":
+                        drives = get_windows_drives()
+                        dirs = [drive + ":" for drive in drives]
+                    else:
+                        path = "/"
+                        prefix = "/"
+                if path:
+                    for de in os.scandir(path):  # type: os.DirEntry
+                        if de.is_file():
+                            files.append(de.name)
+                        if de.is_dir():
+                            dirs.append(de.name)
+                await self._send({
+                    "action": "scan_result",
+                    "scan_id": scan_id,
+                    "prefix": prefix,
+                    "files": files,
+                    "dirs": dirs,
+                })
+            except Exception as ex:
+                await self._send({
+                    "action": "scan_failed",
+                    "scan_id": scan_id,
+                    "msg": str(ex)
+                })
         else:
             raise RuntimeError(f"Unknown action {action}")
 

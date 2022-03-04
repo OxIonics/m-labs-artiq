@@ -126,7 +126,7 @@ def get_argparser():
         "show", help="show schedule, log, devices or datasets")
     parser_show.add_argument(
         "what", metavar="WHAT",
-        choices=["schedule", "log", "ccb", "devices", "datasets"],
+        choices=["schedule", "log", "ccb", "devices", "datasets", "explist"],
         help="select object to show: %(choices)s")
 
     subparsers.add_parser(
@@ -140,10 +140,18 @@ def get_argparser():
                                    default=None, nargs="?",
                                    help="use a specific repository revision "
                                         "(defaults to head)")
+    parser_scan_repos.add_argument(
+        "--worker-mgr-id",
+        help="Scan the repo associated with a worker manager",
+    )
 
     parser_ls = subparsers.add_parser(
         "ls", help="list a directory on the master")
     parser_ls.add_argument("directory", default="", nargs="?")
+    parser_ls.add_argument(
+        "--worker-mgr-id",
+        help="Scan the repo associated with a worker manager",
+    )
 
     common_args.verbosity_args(parser)
     return parser
@@ -236,13 +244,13 @@ def _action_scan_devices(remote, args):
 
 def _action_scan_repository(remote, args):
     if getattr(args, "async"):
-        remote.scan_repository_async(args.revision)
+        remote.scan_repository_async(args.revision, args.worker_mgr_id)
     else:
-        remote.scan_repository(args.revision)
+        remote.scan_repository(args.revision, args.worker_mgr_id)
 
 
 def _action_ls(remote, args):
-    contents = remote.list_directory(args.directory)
+    contents = remote.list_directory(args.directory, args.worker_mgr_id)
     for name in sorted(contents, key=lambda x: (x[-1] not in "\\/", x)):
         print(name)
 
@@ -293,6 +301,15 @@ def _show_datasets(datasets):
     table = PrettyTable(["Dataset", "Persistent", "Value"])
     for k, (persist, value) in sorted(datasets.items(), key=itemgetter(0)):
         table.add_row([k, "Y" if persist else "N", short_format(value)])
+    print(table)
+
+
+def _show_exp_list(explist):
+    clear_screen()
+    table = PrettyTable(["ManagerID", "Name"])
+    for mgr_id, exps in explist.items():
+        for exp in exps:
+            table.add_row([mgr_id, exp])
     print(table)
 
 
@@ -359,8 +376,10 @@ def main():
             _show_dict(args, "devices", _show_devices)
         elif args.what == "datasets":
             _show_dict(args, "datasets", _show_datasets)
+        elif args.what == "explist":
+            _show_dict(args, "all_explist", _show_exp_list)
         else:
-            raise ValueError
+            raise ValueError(f"Unknown show option: {args.what}")
     else:
         port = CONTROL_PORT if args.port is None else args.port
         target_name = {
