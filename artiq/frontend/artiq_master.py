@@ -171,6 +171,7 @@ def main():
         "explist_status": experiment_db.local_status,
         "all_explist": experiment_db.all_explist,
         "all_explist_status": experiment_db.all_status,
+        "worker_managers": worker_manager_db.notifier,
     })
     dataset_namespaces.set_publisher(server_notify)
     loop.run_until_complete(server_notify.start(
