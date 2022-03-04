@@ -21,6 +21,7 @@ from sipyco.asyncio_tools import atexit_register_coroutine
 
 from artiq import __artiq_dir__ as artiq_dir, __version__ as artiq_version
 from artiq.consts import CONTROL_PORT, NOTIFY_PORT
+from artiq.dashboard.quick_open_dialog import init_quick_open_dialog
 from artiq.tools import get_user_config_dir
 from artiq.gui.models import ModelSubscriber
 from artiq.gui import state, log
@@ -279,6 +280,7 @@ def main():
     if d_log0 is not None:
         main_window.tabifyDockWidget(d_schedule, d_log0)
 
+    init_quick_open_dialog(main_window, d_explorer, expmgr)
 
     if server_name is not None:
         server_description = server_name + " ({})".format(args.server)

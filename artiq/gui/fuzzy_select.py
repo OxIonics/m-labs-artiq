@@ -22,7 +22,7 @@ class FuzzySelectWidget(LayoutWidget):
     finished = QtCore.pyqtSignal(str, int)
 
     def __init__(self,
-                 choices: List[Tuple[str, int]] = [],
+                 choices: List[Tuple[str, str, int]] = [],
                  entry_count_limit: int = 10,
                  *args):
         """
@@ -59,10 +59,10 @@ class FuzzySelectWidget(LayoutWidget):
 
         self.set_choices(choices)
 
-    def set_choices(self, choices: List[Tuple[str, int]]) -> None:
+    def set_choices(self, choices: List[Tuple[str, str, int]]) -> None:
         """Update the list of choices available to the user."""
         # Keep sorted in the right order for when the query is empty.
-        self.choices = sorted(choices, key=lambda a: (a[1], a[0]))
+        self.choices = sorted(choices, key=lambda a: (a[2], a[0]))
         if self.menu:
             self._update_menu()
 
@@ -137,9 +137,9 @@ class FuzzySelectWidget(LayoutWidget):
 
         first_action = None
         last_action = None
-        for choice in filtered_choices:
-            action = QtWidgets.QAction(choice, self.menu)
-            action.triggered.connect(partial(self._finish, action, choice))
+        for label, url in filtered_choices:
+            action = QtWidgets.QAction(label, self.menu)
+            action.triggered.connect(partial(self._finish, action, url))
             action.modifiers = 0
             self.menu.addAction(action)
             if not first_action:
@@ -183,8 +183,6 @@ class FuzzySelectWidget(LayoutWidget):
         lexicographically.
         """
         query = self.line_edit.text()
-        if not query:
-            return [label for label, _ in self.choices]
 
         # Find all "substring" matches of the given query in the labels,
         # allowing any number of characters between each query character.
@@ -198,24 +196,30 @@ class FuzzySelectWidget(LayoutWidget):
 
         # `re` seems to be the fastest way of doing this in CPython, even with
         # all the (non-greedy) wildcards.
-        suggestions = []
-        pattern_str = ".*?".join(map(re.escape, query))
-        pattern = re.compile(pattern_str, flags=re.IGNORECASE)
-        for label, weight in self.choices:
-            matches = []
-            # Manually loop over shortest matches at each position;
-            # re.finditer() only returns non-overlapping matches.
-            pos = 0
-            while True:
-                r = pattern.search(label, pos=pos)
-                if not r:
-                    break
-                start, stop = r.span()
-                matches.append((stop - start - weight, start, label))
-                pos = start + 1
-            if matches:
-                suggestions.append(min(matches))
-        return [x for _, _, x in sorted(suggestions)]
+        if not query:
+            suggestions = [
+                (-weight, 0, label, url)
+                for url, label, weight in self.choices
+            ]
+        else:
+            suggestions = []
+            pattern_str = ".*?".join(map(re.escape, query))
+            pattern = re.compile(pattern_str, flags=re.IGNORECASE)
+            for url, label, weight in self.choices:
+                matches = []
+                # Manually loop over shortest matches at each position;
+                # re.finditer() only returns non-overlapping matches.
+                pos = 0
+                while True:
+                    r = pattern.search(label, pos=pos)
+                    if not r:
+                        break
+                    start, stop = r.span()
+                    matches.append((stop - start - weight, start, label, url))
+                    pos = start + 1
+                if matches:
+                    suggestions.append(min(matches))
+        return [(label, url) for _, _, label, url in sorted(suggestions)]
 
     def _close(self):
         if self.menu:
