@@ -129,6 +129,10 @@ def main():
     # initialize application
     args = get_argparser().parse_args()
     widget_log_handler = log.init_log(args, "dashboard")
+    if args.verbose == 2:
+        # This is super chatty on debug. Limit it to info unless we get more
+        # than two verbose flags.
+        logging.getLogger("qasync").setLevel(logging.INFO)
 
     if args.plugin_modules:
         for mod in args.plugin_modules:
