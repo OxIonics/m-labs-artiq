@@ -241,6 +241,9 @@ class AllStatusUpdater(ActiveWorkerManagerModel[StatusUpdater]):
     def _make_model(self, mgr_id, data):
         return StatusUpdater(data)
 
+    def has_active_repo_ever_been_scanned(self):
+        return self._active_model is not None
+
 
 class WorkerManagerModel(DictSyncModel):
 
@@ -291,7 +294,9 @@ class ExplorerDock(QtWidgets.QDockWidget):
                  schedule_ctl, experiment_db_ctl, device_db_ctl,
                  local_worker_manager_id):
         QtWidgets.QDockWidget.__init__(self, "Explorer")
+        self.active_worker_manager_id = None
         self.local_worker_manager_id = local_worker_manager_id
+        self.experiment_db_ctl = experiment_db_ctl
         self.setObjectName("Explorer")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
@@ -476,7 +481,17 @@ class ExplorerDock(QtWidgets.QDockWidget):
     def restore_state(self, state):
         self.current_directory = state["current_directory"]
 
+    def scan_repository(self):
+        asyncio.ensure_future(self.experiment_db_ctl.scan_repository_async(
+            worker_manager_id=self.active_worker_manager_id,
+        ))
+
     def _repo_selected_changed(self, index):
         data = self.repo_select.currentData()
-        self.explist_model.set_active_worker_manager(data["id"])
-        self.status_model.set_active_worker_manager(data["id"])
+        mgr_id = data["id"]
+        self.active_worker_manager_id = mgr_id
+        self.explist_model.set_active_worker_manager(mgr_id)
+        self.status_model.set_active_worker_manager(mgr_id)
+        if not self.status_model.has_active_repo_ever_been_scanned():
+            self.scan_repository()
+
