@@ -91,11 +91,11 @@ class DictSyncModel(QtCore.QAbstractTableModel):
         return len(self.headers)
 
     def data(self, index, role):
-        if not index.isValid() or role != QtCore.Qt.DisplayRole:
+        if not index.isValid():
             return None
         else:
             k = self.row_to_key[index.row()]
-            return self.convert(k, self.backing_store[k], index.column())
+            return self.convert(k, self.backing_store[k], index.column(), role)
 
     def headerData(self, col, orientation, role):
         if (orientation == QtCore.Qt.Horizontal and
@@ -153,7 +153,7 @@ class DictSyncModel(QtCore.QAbstractTableModel):
     def sort_key(self, k, v):
         raise NotImplementedError
 
-    def convert(self, k, v, column):
+    def convert(self, k, v, column, role):
         raise NotImplementedError
 
 

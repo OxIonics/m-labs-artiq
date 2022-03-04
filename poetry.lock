@@ -820,6 +820,22 @@ url = "http://pypi.oxionics.com:3141/oiuser/oxionics/+simple"
 reference = "oxionics"
 
 [[package]]
+name = "pyqt5-stubs"
+version = "5.15.2.0"
+description = "PEP561 stub files for the PyQt5 framework"
+category = "dev"
+optional = false
+python-versions = ">= 3.5"
+
+[package.extras]
+build = ["docker (==4.2.0)"]
+
+[package.source]
+type = "legacy"
+url = "http://pypi.oxionics.com:3141/oiuser/oxionics/+simple"
+reference = "oxionics"
+
+[[package]]
 name = "pyqtgraph"
 version = "0.12.3"
 description = "Scientific Graphics and GUI Library for Python"
@@ -892,7 +908,7 @@ reference = "oxionics"
 
 [[package]]
 name = "pytest-asyncio"
-version = "0.18.1"
+version = "0.18.2"
 description = "Pytest support for asyncio"
 category = "dev"
 optional = false
@@ -1425,7 +1441,7 @@ remote-flashing = ["paramiko"]
 [metadata]
 lock-version = "1.1"
 python-versions = "~3.8"
-content-hash = "54e4c6b876d85a0aacdb1f262fc383cdb53a683b8ffaa93b1156fcaa7a61e996"
+content-hash = "1a2bd16fb763cda0afcec6654dc3023c1e2b218753a49d6b1f1671d0deeb82bd"
 
 [metadata.files]
 alabaster = [
@@ -1938,6 +1954,10 @@ pyqt5-sip = [
     {file = "PyQt5_sip-12.9.1-cp39-cp39-win_amd64.whl", hash = "sha256:989d51c41456cc496cb96f0b341464932b957040d26561f0bb4cf5a0914d6b36"},
     {file = "PyQt5_sip-12.9.1.tar.gz", hash = "sha256:2f24f299b44c511c23796aafbbb581bfdebf78d0905657b7cee2141b4982030e"},
 ]
+pyqt5-stubs = [
+    {file = "PyQt5-stubs-5.15.2.0.tar.gz", hash = "sha256:dc0dea66f02fe297fb0cddd5767fbf58275b54ecb67f69ebeb994e1553bfb9b2"},
+    {file = "PyQt5_stubs-5.15.2.0-py3-none-any.whl", hash = "sha256:4b750d04ffca1bb188615d1a4e7d655a1d81d30df6ee3488f0adfe09b78e3d36"},
+]
 pyqtgraph = [
     {file = "pyqtgraph-0.12.3-py3-none-any.whl", hash = "sha256:06997eaae40bfa2b870647f98384a63b12f75118303b674337a080f8eb9a0030"},
     {file = "pyqtgraph-0.12.3.tar.gz", hash = "sha256:f1dfee710fa5e9abaaf3d4dff0116659e6c7b4e7b514870c5cddad268a753d74"},
@@ -1974,8 +1994,8 @@ pytest = [
     {file = "pytest-6.2.5.tar.gz", hash = "sha256:131b36680866a76e6781d13f101efb86cf674ebb9762eb70d3082b6f29889e89"},
 ]
 pytest-asyncio = [
-    {file = "pytest-asyncio-0.18.1.tar.gz", hash = "sha256:c43fcdfea2335dd82ffe0f2774e40285ddfea78a8e81e56118d47b6a90fbb09e"},
-    {file = "pytest_asyncio-0.18.1-py3-none-any.whl", hash = "sha256:c9ec48e8bbf5cc62755e18c4d8bc6907843ec9c5f4ac8f61464093baeba24a7e"},
+    {file = "pytest-asyncio-0.18.2.tar.gz", hash = "sha256:fc8e4190f33fee7797cc7f1829f46a82c213f088af5d1bb5d4e454fe87e6cdc2"},
+    {file = "pytest_asyncio-0.18.2-py3-none-any.whl", hash = "sha256:20db0bdd3d7581b2e11f5858a5d9541f2db9cd8c5853786f94ad273d466c8c6d"},
 ]
 python-dateutil = [
     {file = "python-dateutil-2.8.2.tar.gz", hash = "sha256:0123cacc1627ae19ddf3c27a5de5bd67ee4586fbdd6440d9748f8abb483d3e86"},

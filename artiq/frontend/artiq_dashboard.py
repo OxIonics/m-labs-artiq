@@ -179,7 +179,8 @@ def main():
     for notifier_name, modelf in (("all_explist", explorer.AllExpListModel),
                                   ("all_explist_status", explorer.AllStatusUpdater),
                                   ("datasets", datasets.Model),
-                                  ("schedule", schedule.Model)):
+                                  ("schedule", schedule.Model),
+                                  ("worker_managers", explorer.WorkerManagerModel)):
         subscriber = ModelSubscriber(notifier_name, modelf,
             report_disconnect)
         loop.run_until_complete(subscriber.connect(
@@ -217,9 +218,11 @@ def main():
     d_explorer = explorer.ExplorerDock(expmgr, d_shortcuts,
                                        sub_clients["all_explist"],
                                        sub_clients["all_explist_status"],
+                                       sub_clients["worker_managers"],
                                        rpc_clients["schedule"],
                                        rpc_clients["experiment_db"],
-                                       rpc_clients["device_db"])
+                                       rpc_clients["device_db"],
+                                       local_worker_manager_id)
     smgr.register(d_explorer)
 
     d_datasets = datasets.DatasetsDock(sub_clients["datasets"],

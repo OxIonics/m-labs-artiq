@@ -70,6 +70,7 @@ pytest-asyncio = "^0.18.1"
 lit = "^14.0.0"
 outputcheck = "^0.4.1"
 flake8 = "^4.0.1"
+pyqt5-stubs = "^5.15.2"
 
 [tool.poetry-dynamic-versioning]
 enable = true
