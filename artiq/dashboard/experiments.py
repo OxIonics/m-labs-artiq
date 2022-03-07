@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 import dataclasses
 import logging
 import asyncio
@@ -250,11 +252,32 @@ log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 class _ExperimentDock(QtWidgets.QMdiSubWindow):
     sigClosed = QtCore.pyqtSignal()
 
-    def __init__(self, manager, expurl):
+    @staticmethod
+    def _make_title(manager: ExperimentManager, expurl):
+        exp = manager.resolve_expurl(expurl)
+        if exp.worker_manager_id is None:
+            worker_manager_desc = "-- builtin --"
+        elif exp.worker_manager_id == manager.local_worker_manager_id:
+            worker_manager_desc = "-- local --"
+        else:
+            try:
+                worker_manager_desc = manager.worker_managers[exp.worker_manager_id]["description"]
+            except KeyError:
+                worker_manager_desc = exp.worker_manager_id
+
+        if exp.repo:
+            exp_desc = exp.repo_experiment_id
+        else:
+            exp_desc = f"{exp.file}#{exp.class_name}"
+
+        return f"{worker_manager_desc} :: {exp_desc}"
+
+    def __init__(self, manager: ExperimentManager, expurl):
         QtWidgets.QMdiSubWindow.__init__(self)
         qfm = QtGui.QFontMetrics(self.font())
         self.resize(100*qfm.averageCharWidth(), 30*qfm.lineSpacing())
-        self.setWindowTitle(expurl)
+
+        self.setWindowTitle(self._make_title(manager, expurl))
         self.setWindowIcon(QtWidgets.QApplication.style().standardIcon(
             QtWidgets.QStyle.SP_FileDialogContentsView))
 
@@ -528,6 +551,7 @@ class ExperimentManager:
 
     def __init__(self, main_window, dataset_sub,
                  explist_sub, schedule_sub,
+                 worker_manager_sub,
                  schedule_ctl, experiment_db_ctl,
                  local_worker_manager_id,
                  ):
@@ -548,6 +572,8 @@ class ExperimentManager:
         explist_sub.add_setmodel_callback(self.set_explist_model)
         self.schedule = dict()
         schedule_sub.add_setmodel_callback(self.set_schedule_model)
+        self.worker_managers = {}
+        worker_manager_sub.add_setmodel_callback(self.set_worker_manager_model)
 
         self.open_experiments = dict()
 
@@ -559,6 +585,9 @@ class ExperimentManager:
 
     def set_schedule_model(self, model):
         self.schedule = model.backing_store
+
+    def set_worker_manager_model(self, model):
+        self.worker_managers = model.backing_store
 
     def resolve_expurl(self, expurl):
         parsed = urllib.parse.urlparse(expurl)

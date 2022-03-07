@@ -210,6 +210,7 @@ def main():
                                            sub_clients["datasets"],
                                            sub_clients["all_explist"],
                                            sub_clients["schedule"],
+                                           sub_clients["worker_managers"],
                                            rpc_clients["schedule"],
                                            rpc_clients["experiment_db"],
                                            local_worker_manager_id)
