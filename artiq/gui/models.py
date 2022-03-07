@@ -1,3 +1,5 @@
+import collections
+
 from PyQt5 import QtCore
 
 from sipyco.sync_struct import Subscriber, process_mod
@@ -149,6 +151,15 @@ class DictSyncModel(QtCore.QAbstractTableModel):
         def update():
             self[k] = self.backing_store[k]
         return _SyncSubstruct(update, self.backing_store[k])
+
+    def pop(self, k, v=None):
+        try:
+            v = self.backing_store[k]
+        except KeyError:
+            pass
+        else:
+            del self[k]
+        return v
 
     def sort_key(self, k, v):
         raise NotImplementedError
