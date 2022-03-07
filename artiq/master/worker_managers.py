@@ -6,6 +6,7 @@ from typing import AsyncIterator, Callable, Dict, List, Tuple
 import uuid
 
 from sipyco import pyon
+from sipyco.logging_tools import log_with_name
 from sipyco.sync_struct import Notifier
 
 from artiq.master.worker_transport import WorkerTransport
@@ -171,6 +172,15 @@ class WorkerManagerProxy:
                     self._worker_action(obj)
                 elif action in self.scan_messages:
                     self._scan_action(obj)
+                elif action == "manager_log":
+                    logs = obj["logs"]
+                    for l in logs:
+                        log_with_name(
+                            l["name"],
+                            l["levelno"],
+                            l["msg"],
+                            extra={"source": f"mgr({self.description})"}
+                        )
                 else:
                     raise RuntimeError(f"Unexpected action {action}")
         except asyncio.CancelledError:

@@ -14,6 +14,7 @@ from sipyco.logging_tools import LogParser
 from artiq.consts import WORKER_MANAGER_PORT
 from artiq.master.worker_transport import PipeWorkerTransport, WorkerTransport
 from artiq.tools import get_windows_drives
+from artiq.worker_manager.logging import init_log_forwarding
 
 log = logging.getLogger(__name__)
 
@@ -133,6 +134,7 @@ class WorkerManager:
             f"Connected to {host}:{port} with id {instance.id}, "
             f"starting processors and sending hello",
         )
+        init_log_forwarding(instance._send)
         instance.start()
         await instance.send_hello()
         return instance
