@@ -122,7 +122,9 @@ class WorkerManager:
                 constructor
         """
         logging.debug(f"Connecting to {host}:{port}")
-        reader, writer = await asyncio.open_connection(host, port)
+        reader, writer = await asyncio.open_connection(
+            host, port, limit=1 * 1024 * 1024,
+        )
         instance = cls(
             manager_id, description, reader, writer,
             **kwargs,
