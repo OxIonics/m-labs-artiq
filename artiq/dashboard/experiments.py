@@ -257,7 +257,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
         exp = manager.resolve_expurl(expurl)
         if exp.worker_manager_id is None:
             worker_manager_desc = "-- builtin --"
-        elif exp.worker_manager_id == manager.local_worker_manager_id:
+        elif exp.worker_manager_id == manager.local_worker_manager.id:
             worker_manager_desc = "-- local --"
         else:
             try:
@@ -608,12 +608,12 @@ class ExperimentManager:
                  explist_sub, schedule_sub,
                  worker_manager_sub,
                  schedule_ctl, experiment_db_ctl,
-                 local_worker_manager_id,
+                 local_worker_manager,
                  ):
         self.main_window = main_window
         self.schedule_ctl = schedule_ctl
         self.experiment_db_ctl = experiment_db_ctl
-        self.local_worker_manager_id = local_worker_manager_id
+        self.local_worker_manager = local_worker_manager
 
         self.dock_states = dict()
         self.submission_scheduling = dict()
@@ -888,7 +888,7 @@ class ExperimentManager:
             self.open_experiment(expurl)
 
     async def open_local_file(self, file):
-        await self.open_file(file, self.local_worker_manager_id)
+        await self.open_file(file, self.local_worker_manager.id)
 
     def save_state(self):
         for expurl, dock in self.open_experiments.items():

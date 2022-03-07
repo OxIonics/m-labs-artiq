@@ -21,6 +21,7 @@ from sipyco.asyncio_tools import atexit_register_coroutine
 
 from artiq import __artiq_dir__ as artiq_dir, __version__ as artiq_version
 from artiq.consts import CONTROL_PORT, NOTIFY_PORT
+from artiq.dashboard.local_worker_manager import LocalWorkerManager
 from artiq.dashboard.quick_open_dialog import init_quick_open_dialog
 from artiq.tools import get_user_config_dir
 from artiq.gui.models import ModelSubscriber
@@ -99,33 +100,6 @@ class MdiArea(QtWidgets.QMdiArea):
         painter.drawPixmap(x, y, self.pixmap)
 
 
-async def start_local_worker_manager(args):
-    worker_manager_id = str(uuid.uuid4())
-
-    cmd = [
-        sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
-        "--id", worker_manager_id,
-        socket.gethostname(), args.server,
-    ]
-    if args.verbose:
-        cmd.append("-" + "v" * args.verbose)
-
-    process = await asyncio.create_subprocess_exec(*cmd)
-
-    async def stop_local_worker_manager():
-        process.terminate()
-        try:
-            await asyncio.wait_for(process.wait(), 5)
-        except asyncio.TimeoutError:
-            logging.error("Local worker manager didn't exit from terminate")
-            process.kill()
-
-    atexit_register_coroutine(stop_local_worker_manager)
-
-    return worker_manager_id
-
-
-
 def main():
     # initialize application
     args = get_argparser().parse_args()
@@ -151,7 +125,8 @@ def main():
     atexit.register(loop.close)
     smgr = state.StateManager(args.db_file)
 
-    local_worker_manager_id = loop.run_until_complete(start_local_worker_manager(args))
+    local_worker_manager = LocalWorkerManager(args.server, args.verbose)
+    smgr.register(local_worker_manager)
 
     # create connections to master
     rpc_clients = dict()
@@ -213,7 +188,7 @@ def main():
                                            sub_clients["worker_managers"],
                                            rpc_clients["schedule"],
                                            rpc_clients["experiment_db"],
-                                           local_worker_manager_id)
+                                           local_worker_manager)
     smgr.register(expmgr)
     d_shortcuts = shortcuts.ShortcutsDock(main_window, expmgr)
     smgr.register(d_shortcuts)
@@ -224,7 +199,7 @@ def main():
                                        rpc_clients["schedule"],
                                        rpc_clients["experiment_db"],
                                        rpc_clients["device_db"],
-                                       local_worker_manager_id)
+                                       local_worker_manager)
     smgr.register(d_explorer)
 
     d_datasets = datasets.DatasetsDock(sub_clients["datasets"],
@@ -285,6 +260,7 @@ def main():
         main_window.tabifyDockWidget(d_schedule, d_log0)
 
     init_quick_open_dialog(main_window, d_explorer, expmgr)
+    local_worker_manager.start()
 
     if server_name is not None:
         server_description = server_name + " ({})".format(args.server)

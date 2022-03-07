@@ -273,7 +273,7 @@ class WorkerManagerModel(DictSyncModel):
         if role == QtCore.Qt.UserRole:
             return v
         elif role == QtCore.Qt.DisplayRole:
-            if v["id"] == self.local_worker_manager_id:
+            if self.local_worker_manager is not None and v["id"] == self.local_worker_manager.id:
                 return "-- local --"
             else:
                 return v["description"]
@@ -301,10 +301,10 @@ class ExplorerDock(QtWidgets.QDockWidget):
                  explist_sub, explist_status_sub,
                  worker_manager_sub,
                  schedule_ctl, experiment_db_ctl, device_db_ctl,
-                 local_worker_manager_id):
+                 local_worker_manager):
         QtWidgets.QDockWidget.__init__(self, "Explorer")
         self.active_worker_manager_id = None
-        self.local_worker_manager_id = local_worker_manager_id
+        self.local_worker_manager = local_worker_manager
         self.experiment_db_ctl = experiment_db_ctl
         self.setObjectName("Explorer")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
@@ -447,7 +447,7 @@ class ExplorerDock(QtWidgets.QDockWidget):
         self.status_model.set_explorer(self)
 
     def set_repo_model(self, model: WorkerManagerModel):
-        model.local_worker_manager_id = self.local_worker_manager_id
+        model.local_worker_manager = self.local_worker_manager
         self.repo_select.setModel(model)
 
     def _get_selected_expname(self):
