@@ -191,3 +191,6 @@ class ThreadWorkerTransport(WorkerTransport):
 
         finally:
             self._exit.close()
+
+    def description(self):
+        return "builtin"
