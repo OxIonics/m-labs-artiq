@@ -7,11 +7,10 @@ scanning devices, scheduling experiments, and looking for experiments/devices.
 """
 
 import argparse
-from contextlib import contextmanager
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 import logging
 from os.path import abspath
 import socket
-import subprocess
 import uuid
 
 import time
@@ -23,7 +22,7 @@ from dateutil.parser import parse as parse_date
 
 from prettytable import PrettyTable
 
-from sipyco.pc_rpc import Client
+from sipyco.pc_rpc import AsyncioClient, Client
 from sipyco.sync_struct import Subscriber
 from sipyco.broadcast import Receiver
 from sipyco import common_args, pyon
@@ -44,6 +43,18 @@ def clear_screen():
 def _rpc_client(args, target):
     port = CONTROL_PORT if args.port is None else args.port
     master_client = Client(args.server, port, target)
+
+    try:
+        yield master_client
+    finally:
+        master_client.close_rpc()
+
+
+@asynccontextmanager
+async def _async_rpc_client(args, target):
+    port = CONTROL_PORT if args.port is None else args.port
+    master_client = AsyncioClient()
+    await master_client.connect_rpc(args.server, port, target)
 
     try:
         yield master_client
@@ -177,26 +188,84 @@ def get_argparser():
     return parser
 
 
-def _action_submit(args):
+@asynccontextmanager
+async def _plain_dict_subscriber(master, port, notifier, notify_cb):
+    data = {}
+
+    def init_data(x):
+        data.clear()
+        data.update(x)
+        return data
+
+    subscriber = Subscriber(
+        notifier,
+        init_data,
+        lambda mod: notify_cb(mod, data),
+    )
+    await subscriber.connect(master, port)
+    try:
+        yield data
+    finally:
+        await subscriber.close()
+
+
+@asynccontextmanager
+async def _make_worker_manager(args):
+    worker_manager_id = str(uuid.uuid4())
+    cmd = [
+        sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
+        "--id", worker_manager_id, "--exit-on-idle",
+        socket.gethostname(), args.server,
+    ]
+    if args.verbose:
+        cmd.append("-" + "v" * args.verbose)
+
+    connected = asyncio.get_event_loop().create_future()
+
+    def worker_managers_cb(mod, data):
+        if worker_manager_id in data:
+            connected.set_result(None)
+
+    async with AsyncExitStack() as stack:
+        worker_manager, available_worker_managers = await asyncio.gather(
+            asyncio.create_subprocess_exec(*cmd),
+            stack.enter_async_context(
+                _plain_dict_subscriber(
+                    args.server, NOTIFY_PORT, "worker_managers", worker_managers_cb,
+                )
+            ),
+        )
+
+        try:
+            await connected
+            yield worker_manager_id
+            await worker_manager.wait()
+        finally:
+            if worker_manager.returncode is None:
+                print("Killing worker manager")
+                worker_manager.kill()
+                await asyncio.wait_for(worker_manager.wait(), 1)
+            if worker_manager.returncode is None:
+                print("Worker manager didn't exit")
+            elif worker_manager.returncode != 0:
+                print("Worker exited with non-zero return code")
+
+
+async def _submit(args):
     try:
         arguments = parse_arguments(args.arguments)
     except Exception as err:
         raise ValueError("Failed to parse run arguments") from err
 
-    with _rpc_client(args, "master_schedule") as remote:
+    async with AsyncExitStack() as stack:
+        remote = await stack.enter_async_context(
+            _async_rpc_client(args, "master_schedule")
+        )
         worker_manager = None
         if args.start_worker_mgr:
-            worker_manager_id = str(uuid.uuid4())
-            cmd = [
-                sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
-                "--id", worker_manager_id, "--exit-on-idle",
-                socket.gethostname(), args.server,
-            ]
-            if args.verbose:
-                cmd.append("-" + "v" * args.verbose)
-            worker_manager = subprocess.Popen(cmd)
-            # TODO wait for worker manager to be connected in some more reliable way
-            time.sleep(0.5)
+            worker_manager_id = await stack.enter_async_context(
+                _make_worker_manager(args)
+            )
         elif args.worker_mgr_id:
             worker_manager_id = args.worker_mgr_id
         else:
@@ -207,36 +276,33 @@ def _action_submit(args):
         else:
             file = abspath(args.file)
 
-        try:
-            expid = {
-                "log_level": logging.WARNING + args.quiet*10 - args.verbose*10,
-                "file": file,
-                "class_name": args.class_name,
-                "arguments": arguments,
-                "worker_manager_id": worker_manager_id,
-            }
-            if args.repository:
-                expid["repo_rev"] = args.revision
-            if args.timed is None:
-                due_date = None
-            else:
-                due_date = time.mktime(parse_date(args.timed).timetuple())
-            rid = remote.submit(args.pipeline, expid,
-                                args.priority, due_date, args.flush)
-            print("RID: {}".format(rid))
+        expid = {
+            "log_level": logging.WARNING + args.quiet*10 - args.verbose*10,
+            "file": file,
+            "class_name": args.class_name,
+            "arguments": arguments,
+            "worker_manager_id": worker_manager_id,
+        }
+        if args.repository:
+            expid["repo_rev"] = args.revision
+        if args.timed is None:
+            due_date = None
+        else:
+            due_date = time.mktime(parse_date(args.timed).timetuple())
+        rid = await remote.submit(args.pipeline, expid,
+                                  args.priority, due_date, args.flush)
+        print("RID: {}".format(rid))
 
-            if worker_manager:
-                worker_manager.wait()
-        finally:
-            if worker_manager is not None:
-                if worker_manager.returncode is None:
-                    print("Killing worker manager")
-                    worker_manager.kill()
-                    worker_manager.wait(1)
-                if worker_manager.returncode is None:
-                    print("Worker manager didn't exit")
-                elif worker_manager.returncode != 0:
-                    print("Worker exited with non-zero return code")
+        if worker_manager:
+            worker_manager.wait()
+
+
+def _action_submit(args):
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(_submit(args))
+    finally:
+        loop.close()
 
 
 def _action_delete(args):
