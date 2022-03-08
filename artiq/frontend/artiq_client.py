@@ -274,6 +274,23 @@ def _action_ls(args):
             print(name)
 
 
+def _action_show(args):
+    if args.what == "schedule":
+        _show_dict(args, "schedule", _show_schedule)
+    elif args.what == "log":
+        _show_log(args)
+    elif args.what == "ccb":
+        _show_ccb(args)
+    elif args.what == "devices":
+        _show_dict(args, "devices", _show_devices)
+    elif args.what == "datasets":
+        _show_dict(args, "datasets", _show_datasets)
+    elif args.what == "explist":
+        _show_dict(args, "all_explist", _show_exp_list)
+    else:
+        raise ValueError(f"Unknown show option: {args.what}")
+
+
 def _show_schedule(schedule):
     clear_screen()
     if schedule:
@@ -384,23 +401,7 @@ def _show_ccb(args):
 def main():
     args = get_argparser().parse_args()
     action = args.action.replace("-", "_")
-    if action == "show":
-        if args.what == "schedule":
-            _show_dict(args, "schedule", _show_schedule)
-        elif args.what == "log":
-            _show_log(args)
-        elif args.what == "ccb":
-            _show_ccb(args)
-        elif args.what == "devices":
-            _show_dict(args, "devices", _show_devices)
-        elif args.what == "datasets":
-            _show_dict(args, "datasets", _show_datasets)
-        elif args.what == "explist":
-            _show_dict(args, "all_explist", _show_exp_list)
-        else:
-            raise ValueError(f"Unknown show option: {args.what}")
-    else:
-        globals()["_action_" + action](args)
+    globals()["_action_" + action](args)
 
 
 if __name__ == "__main__":
