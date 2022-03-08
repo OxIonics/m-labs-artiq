@@ -7,6 +7,7 @@ scanning devices, scheduling experiments, and looking for experiments/devices.
 """
 
 import argparse
+from contextlib import contextmanager
 import logging
 from os.path import abspath
 import socket
@@ -37,6 +38,17 @@ def clear_screen():
         os.system("cls")
     else:
         sys.stdout.write("\x1b[2J\x1b[H")
+
+
+@contextmanager
+def _rpc_client(args, target):
+    port = CONTROL_PORT if args.port is None else args.port
+    master_client = Client(args.server, port, target)
+
+    try:
+        yield master_client
+    finally:
+        master_client.close_rpc()
 
 
 def get_argparser():
@@ -157,102 +169,109 @@ def get_argparser():
     return parser
 
 
-def _action_submit(remote, args):
+def _action_submit(args):
     try:
         arguments = parse_arguments(args.arguments)
     except Exception as err:
         raise ValueError("Failed to parse run arguments") from err
 
-    worker_manager = None
-    if args.start_worker_mgr:
-        worker_manager_id = str(uuid.uuid4())
-        cmd = [
-            sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
-            "--id", worker_manager_id, "--exit-on-idle",
-            socket.gethostname(), args.server,
-        ]
-        if args.verbose:
-            cmd.append("-" + "v" * args.verbose)
-        worker_manager = subprocess.Popen(cmd)
-        # TODO wait for worker manager to be connected in some more reliable way
-        time.sleep(0.5)
-    elif args.worker_mgr_id:
-        worker_manager_id = args.worker_mgr_id
-    else:
-        worker_manager_id = None
-
-    if worker_manager_id is None:
-        file = args.file
-    else:
-        file = abspath(args.file)
-
-    try:
-        expid = {
-            "log_level": logging.WARNING + args.quiet*10 - args.verbose*10,
-            "file": file,
-            "class_name": args.class_name,
-            "arguments": arguments,
-            "worker_manager_id": worker_manager_id,
-        }
-        if args.repository:
-            expid["repo_rev"] = args.revision
-        if args.timed is None:
-            due_date = None
+    with _rpc_client(args, "master_schedule") as remote:
+        worker_manager = None
+        if args.start_worker_mgr:
+            worker_manager_id = str(uuid.uuid4())
+            cmd = [
+                sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
+                "--id", worker_manager_id, "--exit-on-idle",
+                socket.gethostname(), args.server,
+            ]
+            if args.verbose:
+                cmd.append("-" + "v" * args.verbose)
+            worker_manager = subprocess.Popen(cmd)
+            # TODO wait for worker manager to be connected in some more reliable way
+            time.sleep(0.5)
+        elif args.worker_mgr_id:
+            worker_manager_id = args.worker_mgr_id
         else:
-            due_date = time.mktime(parse_date(args.timed).timetuple())
-        rid = remote.submit(args.pipeline, expid,
-                            args.priority, due_date, args.flush)
-        print("RID: {}".format(rid))
+            worker_manager_id = None
 
-        if worker_manager:
-            worker_manager.wait()
-    finally:
-        if worker_manager is not None:
-            if worker_manager.returncode is None:
-                print("Killing worker manager")
-                worker_manager.kill()
-                worker_manager.wait(1)
-            if worker_manager.returncode is None:
-                print("Worker manager didn't exit")
-            elif worker_manager.returncode != 0:
-                print("Worker exited with non-zero return code")
+        if worker_manager_id is None:
+            file = args.file
+        else:
+            file = abspath(args.file)
 
+        try:
+            expid = {
+                "log_level": logging.WARNING + args.quiet*10 - args.verbose*10,
+                "file": file,
+                "class_name": args.class_name,
+                "arguments": arguments,
+                "worker_manager_id": worker_manager_id,
+            }
+            if args.repository:
+                expid["repo_rev"] = args.revision
+            if args.timed is None:
+                due_date = None
+            else:
+                due_date = time.mktime(parse_date(args.timed).timetuple())
+            rid = remote.submit(args.pipeline, expid,
+                                args.priority, due_date, args.flush)
+            print("RID: {}".format(rid))
 
-def _action_delete(remote, args):
-    if args.g:
-        remote.request_termination(args.rid)
-    else:
-        remote.delete(args.rid)
-
-
-def _action_set_dataset(remote, args):
-    persist = None
-    if args.persist:
-        persist = True
-    if args.no_persist:
-        persist = False
-    remote.set(args.name, pyon.decode(args.value), persist)
-
-
-def _action_del_dataset(remote, args):
-    remote.delete(args.name)
-
-
-def _action_scan_devices(remote, args):
-    remote.scan()
+            if worker_manager:
+                worker_manager.wait()
+        finally:
+            if worker_manager is not None:
+                if worker_manager.returncode is None:
+                    print("Killing worker manager")
+                    worker_manager.kill()
+                    worker_manager.wait(1)
+                if worker_manager.returncode is None:
+                    print("Worker manager didn't exit")
+                elif worker_manager.returncode != 0:
+                    print("Worker exited with non-zero return code")
 
 
-def _action_scan_repository(remote, args):
-    if getattr(args, "async"):
-        remote.scan_repository_async(args.revision, args.worker_mgr_id)
-    else:
-        remote.scan_repository(args.revision, args.worker_mgr_id)
+def _action_delete(args):
+    with _rpc_client(args, "master_schedule") as remote:
+        if args.g:
+            remote.request_termination(args.rid)
+        else:
+            remote.delete(args.rid)
 
 
-def _action_ls(remote, args):
-    contents = remote.list_directory(args.directory, args.worker_mgr_id)
-    for name in sorted(contents, key=lambda x: (x[-1] not in "\\/", x)):
-        print(name)
+def _action_set_dataset(args):
+    with _rpc_client(args, "master_dataset_db") as remote:
+        persist = None
+        if args.persist:
+            persist = True
+        if args.no_persist:
+            persist = False
+        remote.set(args.name, pyon.decode(args.value), persist)
+
+
+def _action_del_dataset(args):
+    with _rpc_client(args, "master_dataset_db") as remote:
+        remote.delete(args.name)
+
+
+def _action_scan_devices(args):
+    with _rpc_client(args, "master_device_db") as remote:
+        remote.scan()
+
+
+def _action_scan_repository(args):
+    with _rpc_client(args, "master_experiment_db") as remote:
+        if getattr(args, "async"):
+            remote.scan_repository_async(args.revision, args.worker_mgr_id)
+        else:
+            remote.scan_repository(args.revision, args.worker_mgr_id)
+
+
+def _action_ls(args):
+    with _rpc_client(args, "master_experiment_db") as remote:
+        contents = remote.list_directory(args.directory, args.worker_mgr_id)
+        for name in sorted(contents, key=lambda x: (x[-1] not in "\\/", x)):
+            print(name)
 
 
 def _show_schedule(schedule):
@@ -381,21 +400,7 @@ def main():
         else:
             raise ValueError(f"Unknown show option: {args.what}")
     else:
-        port = CONTROL_PORT if args.port is None else args.port
-        target_name = {
-            "submit": "master_schedule",
-            "delete": "master_schedule",
-            "set_dataset": "master_dataset_db",
-            "del_dataset": "master_dataset_db",
-            "scan_devices": "master_device_db",
-            "scan_repository": "master_experiment_db",
-            "ls": "master_experiment_db"
-        }[action]
-        remote = Client(args.server, port, target_name)
-        try:
-            globals()["_action_" + action](remote, args)
-        finally:
-            remote.close_rpc()
+        globals()["_action_" + action](args)
 
 
 if __name__ == "__main__":
