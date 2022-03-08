@@ -67,6 +67,7 @@ def get_argparser():
     subparsers.required = True
 
     parser_add = subparsers.add_parser("submit", help="submit an experiment")
+    parser_add.set_defaults(func=_action_submit)
     parser_add.add_argument("-p", "--pipeline", default="main", type=str,
                             help="pipeline to run the experiment in "
                                  "(default: %(default)s)")
@@ -112,6 +113,7 @@ def get_argparser():
     parser_delete = subparsers.add_parser("delete",
                                           help="delete an experiment "
                                                "from the schedule")
+    parser_delete.set_defaults(func=_action_delete)
     parser_delete.add_argument("-g", action="store_true",
                                help="request graceful termination")
     parser_delete.add_argument("rid", metavar="RID", type=int,
@@ -119,6 +121,7 @@ def get_argparser():
 
     parser_set_dataset = subparsers.add_parser(
         "set-dataset", help="add or modify a dataset")
+    parser_set_dataset.set_defaults(func=_action_set_dataset)
     parser_set_dataset.add_argument("name", metavar="NAME",
                                     help="name of the dataset")
     parser_set_dataset.add_argument("value", metavar="VALUE",
@@ -132,20 +135,24 @@ def get_argparser():
 
     parser_del_dataset = subparsers.add_parser(
         "del-dataset", help="delete a dataset")
+    parser_del_dataset.set_defaults(func=_action_del_dataset)
     parser_del_dataset.add_argument("name", help="name of the dataset")
 
     parser_show = subparsers.add_parser(
         "show", help="show schedule, log, devices or datasets")
+    parser_show.set_defaults(func=_action_show)
     parser_show.add_argument(
         "what", metavar="WHAT",
         choices=["schedule", "log", "ccb", "devices", "datasets", "explist"],
         help="select object to show: %(choices)s")
 
-    subparsers.add_parser(
+    parser_scan_devices = subparsers.add_parser(
         "scan-devices", help="trigger a device database (re)scan")
+    parser_scan_devices.set_defaults(func=_action_scan_devices)
 
     parser_scan_repos = subparsers.add_parser(
         "scan-repository", help="trigger a repository (re)scan")
+    parser_scan_repos.set_defaults(func=_action_scan_repository)
     parser_scan_repos.add_argument("--async", action="store_true",
                                    help="trigger scan and return immediately")
     parser_scan_repos.add_argument("revision", metavar="REVISION",
@@ -159,6 +166,7 @@ def get_argparser():
 
     parser_ls = subparsers.add_parser(
         "ls", help="list a directory on the master")
+    parser_ls.set_defaults(func=_action_ls)
     parser_ls.add_argument("directory", default="", nargs="?")
     parser_ls.add_argument(
         "--worker-mgr-id",
@@ -400,8 +408,7 @@ def _show_ccb(args):
 
 def main():
     args = get_argparser().parse_args()
-    action = args.action.replace("-", "_")
-    globals()["_action_" + action](args)
+    args.func(args)
 
 
 if __name__ == "__main__":
