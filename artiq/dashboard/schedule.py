@@ -18,6 +18,7 @@ class Model(DictSyncModel):
             ["RID", "Pipeline", "Status", "Prio", "Due date",
              "Revision", "File", "Class name"],
             init)
+        self.worker_managers = {}
 
     def sort_key(self, k, v):
         # order by priority, and then by due date and RID
@@ -42,13 +43,25 @@ class Model(DictSyncModel):
                                      time.localtime(v["due_date"]))
         elif column == 5:
             expid = v["expid"]
-            if "repo_rev" in expid:
-                r = expid["repo_rev"]
-                if v["repo_msg"]:
-                    r += "\n" + elide(v["repo_msg"], 40)
-                return r
+            source_lines = []
+            mgr_id = expid.get("worker_manager_id")
+            if mgr_id is not None:
+                try:
+                    mgr_desc = self.worker_managers[mgr_id]["description"]
+                except KeyError:
+                    mgr_desc = mgr_id
+                source_lines.append(f"mgr: {mgr_desc}")
+
+            repo_rev = expid.get("repo_rev")
+            if repo_rev is None:
+                source_lines.append("Outside repo")
+            elif repo_rev == "N/A":
+                source_lines.append("Inside repo")
             else:
-                return "Outside repo."
+                source_lines.append(f"repo@{repo_rev}")
+                if v["repo_msg"]:
+                    source_lines.append(elide(v["repo_msg"], 40))
+            return "\n".join(source_lines)
         elif column == 6:
             return v["expid"]["file"]
         elif column == 7:
@@ -61,7 +74,7 @@ class Model(DictSyncModel):
 
 
 class ScheduleDock(QtWidgets.QDockWidget):
-    def __init__(self, schedule_ctl, schedule_sub):
+    def __init__(self, schedule_ctl, schedule_sub, worker_managers_sub):
         QtWidgets.QDockWidget.__init__(self, "Schedule")
         self.setObjectName("Schedule")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
@@ -93,7 +106,9 @@ class ScheduleDock(QtWidgets.QDockWidget):
         terminate_pipeline.triggered.connect(self.terminate_pipeline_clicked)
         self.table.addAction(terminate_pipeline)
 
+        self.worker_managers = {}
         self.table_model = Model(dict())
+        worker_managers_sub.add_setmodel_callback(self.set_worker_manager_model)
         schedule_sub.add_setmodel_callback(self.set_model)
 
         cw = QtGui.QFontMetrics(self.font()).averageCharWidth()
@@ -109,7 +124,12 @@ class ScheduleDock(QtWidgets.QDockWidget):
 
     def set_model(self, model):
         self.table_model = model
+        self.table_model.worker_managers = self.worker_managers
         self.table.setModel(self.table_model)
+
+    def set_worker_manager_model(self, model):
+        self.worker_managers = model.backing_store
+        self.table_model.worker_managers = self.worker_managers
 
     async def delete(self, rid, graceful):
         if graceful:

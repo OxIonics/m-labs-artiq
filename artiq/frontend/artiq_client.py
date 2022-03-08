@@ -255,6 +255,23 @@ def _action_ls(remote, args):
         print(name)
 
 
+def _make_exp_source(expid):
+    source_lines = []
+    mgr_id = expid.get("worker_manager_id")
+    if mgr_id is not None:
+        source_lines.append("worker manager:")
+        source_lines.append(mgr_id)
+
+    repo_rev = expid.get("repo_rev")
+    if repo_rev is None:
+        source_lines.append("Outside repo")
+    elif repo_rev == "N/A":
+        source_lines.append("Inside repo")
+    else:
+        source_lines.append(f"repo@{repo_rev}")
+    return "\n".join(source_lines)
+
+
 def _show_schedule(schedule):
     clear_screen()
     if schedule:
@@ -263,7 +280,7 @@ def _show_schedule(schedule):
                                                 x[1]["due_date"] or 0,
                                                 x[0]))
         table = PrettyTable(["RID", "Pipeline", "    Status    ", "Prio",
-                             "Due date", "Revision", "File", "Class name"])
+                             "Due date", "Source", "File", "Class name"])
         for rid, v in sorted_schedule:
             row = [rid, v["pipeline"], v["status"], v["priority"]]
             if v["due_date"] is None:
@@ -272,10 +289,7 @@ def _show_schedule(schedule):
                 row.append(time.strftime("%m/%d %H:%M:%S",
                            time.localtime(v["due_date"])))
             expid = v["expid"]
-            if "repo_rev" in expid:
-                row.append(expid["repo_rev"])
-            else:
-                row.append("Outside repo.")
+            row.append(_make_exp_source(expid))
             row.append(expid["file"])
             if expid["class_name"] is None:
                 row.append("")

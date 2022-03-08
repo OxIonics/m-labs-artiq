@@ -243,7 +243,10 @@ def main():
     atexit_register_coroutine(d_ttl_dds.stop)
 
     d_schedule = schedule.ScheduleDock(
-        rpc_clients["schedule"], sub_clients["schedule"])
+        rpc_clients["schedule"],
+        sub_clients["schedule"],
+        sub_clients["worker_managers"],
+    )
     smgr.register(d_schedule)
 
     logmgr = log.LogDockManager(main_window)
