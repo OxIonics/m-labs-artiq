@@ -214,6 +214,7 @@ async def run_experiment(
             available_worker_managers,
             worker_manager,
             dataset_client,
+            master_client,
         ) = await asyncio.gather(
             stack.enter_async_context(
                 _plain_dict_subscriber(master, notify_port, "schedule", schedule_cb)
@@ -238,14 +239,16 @@ async def run_experiment(
             stack.enter_async_context(
                 _rpc_client(master, control_port, "master_dataset_db"),
             ),
+            stack.enter_async_context(
+                _rpc_client(master, control_port, "master_schedule")
+            ),
         )
 
         await connected
 
         # rid used by notify_cb
         rid = await _submit_experiment(
-            master,
-            control_port,
+            master_client,
             pipeline,
             worker_manager.id,
             experiment_class,
@@ -270,23 +273,22 @@ async def run_experiment(
 
 
 async def _submit_experiment(
-    master, control_port, pipeline, manager_id, experiment_class, arguments, log_level
+    master_client, pipeline, manager_id, experiment_class, arguments, log_level
 ):
-    async with _rpc_client(master, control_port, "master_schedule") as master_client:
-        expid = {
-            "log_level": log_level,
-            "file": os.path.abspath(sys.modules[experiment_class.__module__].__file__),
-            "class_name": experiment_class.__name__,
-            "arguments": arguments,
-            "worker_manager_id": manager_id,
-        }
+    expid = {
+        "log_level": log_level,
+        "file": os.path.abspath(sys.modules[experiment_class.__module__].__file__),
+        "class_name": experiment_class.__name__,
+        "arguments": arguments,
+        "worker_manager_id": manager_id,
+    }
 
-        rid = await master_client.submit(
-            pipeline,
-            expid,
-            -1,  # priority
-            None,  # due_date
-            False,  # flush
-        )
-        log.info(f"Started experiment {experiment_class.__qualname__} with {rid}")
-        return rid
+    rid = await master_client.submit(
+        pipeline,
+        expid,
+        -1,  # priority
+        None,  # due_date
+        False,  # flush
+    )
+    log.info(f"Started experiment {experiment_class.__qualname__} with {rid}")
+    return rid
