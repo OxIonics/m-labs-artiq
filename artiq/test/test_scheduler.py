@@ -638,7 +638,6 @@ class SchedulerCase(unittest.TestCase):
 
     def test_idle_timeout(self):
         """Check that blocking is_idle_callback times out"""
-        loop = self.loop
         scheduler, status_events, flags = self._make_scheduler_for_idle_test()
 
         # Submit empty experiment with lower priority.
