@@ -1,20 +1,19 @@
 import asyncio
-from asyncio import iscoroutine
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
 import logging
-import time
 from typing import AsyncIterator, Tuple
 import uuid
 
 import pytest
 
-from artiq.master.worker_managers import ManagedWorkerTransport, WorkerManagerDB
+from artiq.master.worker_managers import ManagedWorkerTransport
 from artiq.master.worker_transport import WorkerTransport
 from artiq.queue_tools import iterate_queue
+from artiq.test.consts import BIND
+from artiq.test.helpers import assert_num_connection, wait_for
 from artiq.worker_manager.worker_manager import WorkerManager
 
-BIND = "127.0.0.1"
 
 try:
     # anext not defined until python 3.10
@@ -83,26 +82,6 @@ class FakeWorkerTransport(WorkerTransport):
 
 
 @pytest.fixture()
-async def worker_manager_db():
-    async def handle_connection(reader, writer):
-        await instance.handle_connection(reader, writer)
-
-    print("Making WorkerManagerDB")
-    server = await asyncio.start_server(
-        handle_connection,
-        BIND,
-    )
-    async with server:
-        instance = WorkerManagerDB(server)
-        yield instance
-
-
-@pytest.fixture()
-def worker_manager_port(worker_manager_db: WorkerManagerDB):
-    return worker_manager_db.get_ports()[0]
-
-
-@pytest.fixture()
 async def worker_manager(worker_manager_db, worker_manager_port):
     manager_id = str(uuid.uuid4())
     description = "Test workers"
@@ -132,61 +111,6 @@ async def worker_pair(worker_manager_db, worker_manager):
     return ConnectedWorker(transport, worker, stdout, stderr)
 
 
-async def wait_for(check, *args, timeout=1, period=0.01, exc=(AssertionError,)):
-    """ Test utility to wait for an assertion to pass
-
-    function:
-    ```
-    def check():
-        assert x == 1
-
-    wait_for(check, timeout=2)
-    ```
-
-    Args:
-        check: The function to wait to pass. It should raise an exception if
-            it's not ready yet.
-        timeout: How long to wait
-        period: How long to wait between check invocations
-        exc: A tuple of exceptions. Exceptions not in this tuple will
-            propagate immediately. Exceptions in this tuple will not be
-            propagated unless the timeout has been hit.
-
-    Returns:
-        The return value of check if any.
-    """
-    async def check_wrapper():
-        if not iscoroutine(check):
-            value = check(*args)
-            if iscoroutine(value):
-                check_ = value
-            else:
-                return value
-        else:
-            check_ = check
-        return await asyncio.wait_for(
-            check_,
-            timeout=max(deadline - time.time(), 0.01),
-        )
-
-    deadline = time.time() + timeout
-    while time.time() < deadline:
-        iteration_start = time.time()
-        try:
-            return await check_wrapper()
-        except exc:
-            elapsed = time.time() - iteration_start
-            if elapsed < period:
-                await asyncio.sleep(period - elapsed)
-
-    # one last try. Let the exception propagate this time
-    return await check_wrapper()
-
-
-def assert_num_connection(worker_manager_db, num=1):
-    assert len(worker_manager_db._worker_managers) >= num
-
-
 async def test_worker_manager_connection(worker_manager_db, worker_manager_port):
     manager_id = str(uuid.uuid4())
     description = "Test workers"
@@ -202,7 +126,7 @@ async def test_worker_manager_connection(worker_manager_db, worker_manager_port)
 
         assert worker_manager_db._worker_managers.keys() == {manager_id}
         worker_manager_proxy = worker_manager_db._worker_managers[manager_id]
-        assert worker_manager_proxy._description == description
+        assert worker_manager_proxy.description == description
 
 
 async def test_worker_manager_create_worker(worker_manager_db, worker_manager):
