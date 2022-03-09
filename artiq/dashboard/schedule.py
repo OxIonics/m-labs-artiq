@@ -6,6 +6,7 @@ import logging
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 from artiq.gui.models import DictSyncModel
+from artiq.schedule_display import make_exp_source
 from artiq.tools import elide
 
 
@@ -42,26 +43,9 @@ class Model(DictSyncModel):
                 return time.strftime("%m/%d %H:%M:%S",
                                      time.localtime(v["due_date"]))
         elif column == 5:
-            expid = v["expid"]
-            source_lines = []
-            mgr_id = expid.get("worker_manager_id")
-            if mgr_id is not None:
-                try:
-                    mgr_desc = self.worker_managers[mgr_id]["description"]
-                except KeyError:
-                    mgr_desc = mgr_id
-                source_lines.append(f"mgr: {mgr_desc}")
-
-            repo_rev = expid.get("repo_rev")
-            if repo_rev is None:
-                source_lines.append("Outside repo")
-            elif repo_rev == "N/A":
-                source_lines.append("Inside repo")
-            else:
-                source_lines.append(f"repo@{repo_rev}")
-                if v["repo_msg"]:
-                    source_lines.append(elide(v["repo_msg"], 40))
-            return "\n".join(source_lines)
+            return make_exp_source(
+                v["expid"], v.get("repo_msg"), self.worker_managers,
+            )
         elif column == 6:
             return v["expid"]["file"]
         elif column == 7:
