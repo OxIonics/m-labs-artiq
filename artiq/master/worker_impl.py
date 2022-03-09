@@ -39,11 +39,27 @@ from artiq import __version__ as artiq_version
 logger = logging.getLogger(__name__)
 
 ipc = None
+skip_next_status = False
+
+
+def get_object_inner():
+    line = ipc.readline().decode()
+    return pyon.decode(line)
 
 
 def get_object():
-    line = ipc.readline().decode()
-    return pyon.decode(line)
+    global skip_next_status
+    if skip_next_status:
+        # If we received terminate as the reply in `parent_action` then the real
+        # response is still in flight. So we should skip it when it turns up.
+        # If we receive another action then who knows what's going on.
+        obj = get_object_inner()
+        if "action" in obj:
+            raise RuntimeError(
+                f"Unexpected action when expecting to skip a status: {obj!r}"
+            )
+        skip_next_status = False
+    return get_object_inner()
 
 
 def put_object(obj):
@@ -53,11 +69,13 @@ def put_object(obj):
 
 def make_parent_action(action):
     def parent_action(*args, **kwargs):
+        global skip_next_status
         request = {"action": action, "args": args, "kwargs": kwargs}
         put_object(request)
         reply = get_object()
         if "action" in reply:
             if reply["action"] == "terminate":
+                skip_next_status = True
                 sys.exit()
             else:
                 raise ValueError

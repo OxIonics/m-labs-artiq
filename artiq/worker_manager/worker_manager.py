@@ -121,6 +121,7 @@ class WorkerManager:
             **kwargs: More kw only arguments passed to the `WorkerManager
                 constructor
         """
+        logging.warning(f"Temp pid: {os.getpid()}")
         logging.debug(f"Connecting to {host}:{port}")
         reader, writer = await asyncio.open_connection(
             host, port, limit=1 * 1024 * 1024,
@@ -253,8 +254,9 @@ class WorkerManager:
         elif action == "close_worker":
             worker_id = obj["worker_id"]
             log.info(f"Closing worker {worker_id}")
-            worker = self._workers.pop(worker_id)
+            worker = self._workers[worker_id]
             await self._close_worker(worker, obj["term_timeout"], obj["rid"])
+            del self._workers[worker_id]
             await self._send({
                 "action": "worker_closed",
                 "worker_id": worker_id,
