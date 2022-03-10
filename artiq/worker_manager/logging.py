@@ -48,8 +48,6 @@ class ForwardHandler(logging.Handler):
                 self._wake_up.set()
             else:
                 self._loop.call_soon_threadsafe(self._wake_up.set)
-        except RecursionError:  # See issue 36272
-            raise
         except Exception:
             self.handleError(record)
 

@@ -36,8 +36,6 @@ class LoggingCapture(logging.Handler):
             msg = self.format(record)
             f = asyncio.run_coroutine_threadsafe(self._queue.put(msg), self._loop)
             f.result(1)
-        except RecursionError:  # See issue 36272
-            raise
         except Exception:
             self.handleError(record)
 
