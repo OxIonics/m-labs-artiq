@@ -14,7 +14,7 @@ from sipyco.logging_tools import LogParser
 from artiq.consts import WORKER_MANAGER_PORT
 from artiq.master.worker_transport import PipeWorkerTransport, WorkerTransport
 from artiq.tools import get_windows_drives
-from artiq.worker_manager.logging import init_log_forwarding
+from artiq.worker_manager.logging import ForwardHandler
 
 log = logging.getLogger(__name__)
 
@@ -134,7 +134,6 @@ class WorkerManager:
             f"Connected to {host}:{port} with id {instance.id}, "
             f"starting processors and sending hello",
         )
-        init_log_forwarding(instance._send)
         instance.start()
         await instance.send_hello()
         return instance
@@ -175,6 +174,7 @@ class WorkerManager:
         self._new_worker = asyncio.Queue(10)
         self._exit_on_idle = exit_on_idle
         self._repo_root = repo_root
+        self._log_forwarder: Optional[ForwardHandler] = None
         self.stop_request = asyncio.Event()
 
     @property
@@ -196,6 +196,7 @@ class WorkerManager:
     def start(self):
         """Start the worker manager
         """
+        self._log_forwarder = ForwardHandler.start(self._send)
         self._task = asyncio.create_task(self.process_master_msgs())
 
     async def wait_for_exit(self):
@@ -387,6 +388,8 @@ class WorkerManager:
 
     async def _clean_up(self):
         log.info("Closing worker manager")
+        if self._log_forwarder:
+            await self._log_forwarder.stop()
         workers = list(self._workers.values())
         self._workers.clear()
         if workers:
@@ -396,5 +399,9 @@ class WorkerManager:
                 for worker in workers
             ])
 
-        self._writer.close()
-        await self._writer.wait_closed()
+        try:
+            self._writer.close()
+            await self._writer.wait_closed()
+        except ConnectionError:
+            # Connection was already dead
+            pass
