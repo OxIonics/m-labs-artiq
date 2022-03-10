@@ -189,7 +189,9 @@ class SchedulerCase(unittest.TestCase):
     def test_pending_priority(self):
         """Check due dates take precedence over priorities when waiting to
         prepare."""
-        handlers = {}
+        handlers = {
+            "store_results": lambda t, f, d: None,
+        }
         scheduler = self.make_scheduler(handlers)
         handlers["scheduler_check_pause"] = scheduler.check_pause
 
