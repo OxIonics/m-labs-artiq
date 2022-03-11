@@ -113,6 +113,12 @@ def get_argparser():
              "working directory"
     )
     worker_mgr.add_argument(
+        "--thread-worker-mgr", default=False,
+        action="store_true",
+        help="Run the worker manager in process with a thread worker backend for"
+             "debugging"
+    )
+    worker_mgr.add_argument(
         "--worker-mgr-id",
         help="The id of an existing worker manager to use to run the experiment"
     )
@@ -251,6 +257,43 @@ async def _make_worker_manager(args):
                 print("Worker exited with non-zero return code")
 
 
+@asynccontextmanager
+async def _make_thread_worker_manager(args):
+    from artiq.worker_manager.worker_manager import WorkerManager
+    from artiq.test_tools.thread_worker_transport import ThreadWorkerTransport
+
+    worker_manager_id = str(uuid.uuid4())
+    connected = asyncio.get_event_loop().create_future()
+
+    def worker_managers_cb(mod, data):
+        if worker_manager_id in data and not connected.done():
+            connected.set_result(None)
+
+    async with AsyncExitStack() as stack:
+        worker_manager, available_worker_managers = await asyncio.gather(
+            stack.enter_async_context(
+                WorkerManager.context(
+                    args.server,
+                    manager_id=worker_manager_id,
+                    exit_on_idle=True,
+                    transport_factory=ThreadWorkerTransport
+                )
+            ),
+            stack.enter_async_context(
+                _plain_dict_subscriber(
+                    args.server, NOTIFY_PORT, "worker_managers", worker_managers_cb,
+                )
+            ),
+        )
+
+        try:
+            await connected
+            yield worker_manager_id
+            await worker_manager.wait_for_exit()
+        finally:
+            await worker_manager.stop()
+
+
 async def _submit(args):
     try:
         arguments = parse_arguments(args.arguments)
@@ -265,6 +308,10 @@ async def _submit(args):
         if args.start_worker_mgr:
             worker_manager_id = await stack.enter_async_context(
                 _make_worker_manager(args)
+            )
+        elif args.thread_worker_mgr:
+            worker_manager_id = await stack.enter_async_context(
+                _make_thread_worker_manager(args)
             )
         elif args.worker_mgr_id:
             worker_manager_id = args.worker_mgr_id
