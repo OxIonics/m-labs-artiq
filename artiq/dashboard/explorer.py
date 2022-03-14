@@ -253,11 +253,19 @@ class WorkerManagerModel(DictSyncModel):
             "id": None,
             "description": "-- built in --"
         }
-        super().__init__(["Description"], init)
         self.local_worker_manager_id = None
+        super().__init__(["Description"], init)
+
+    def _id_sort_key(self, mgr_id):
+        if mgr_id is None:
+            return 0
+        elif mgr_id == self.local_worker_manager_id:
+            return 1
+        else:
+            return 2
 
     def sort_key(self, k, v):
-        return v["description"]
+        return self._id_sort_key(k), v["description"], k
 
     def convert(self, k, v, column, role):
         if column != 0:
