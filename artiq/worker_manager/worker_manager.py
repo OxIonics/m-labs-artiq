@@ -96,6 +96,7 @@ class _WorkerState:
         self.msg_task = msg_task
         self.stdout_task = stdout_task
         self.stderr_task = stderr_task
+        self.closing = False
 
 
 class WorkerManager:
@@ -258,6 +259,7 @@ class WorkerManager:
             worker_id = obj["worker_id"]
             log.info(f"Closing worker {worker_id}")
             worker = self._workers[worker_id]
+            worker.closing = True
             await self._close_worker(worker, obj["term_timeout"], obj["rid"])
             del self._workers[worker_id]
             await self._send({
@@ -313,7 +315,8 @@ class WorkerManager:
                 "msg": msg,
             })
 
-        if worker_id in self._workers:
+        worker = self._workers.get(worker_id)
+        if worker is not None and not worker.closing:
             log.warning(f"Worker {worker_id} exited unexpectedly")
             await self._send({
                 "action": "worker_error",
