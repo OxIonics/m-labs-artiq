@@ -6,6 +6,7 @@ from typing import AsyncIterator, Callable, Dict, List, Tuple
 import uuid
 
 from sipyco import pyon
+from sipyco.sync_struct import Notifier
 
 from artiq.master.worker_transport import WorkerTransport
 from artiq.queue_tools import iterate_queue
@@ -33,6 +34,31 @@ class WorkerManagerDB:
         self._worker_managers: Dict[str, WorkerManagerProxy] = {}
         self._server: asyncio.AbstractServer = server
 
+        # For notifying clients of changes to worker manager connections. This must be
+        # suitable for PYON serialisation.
+        # Modifications to self._worker_managers must also modify this notifier.
+        self.notifier: Notifier = Notifier({})
+
+    def _remove_worker_manager(self, manager_id):
+        self._worker_managers.pop(manager_id, None)
+        self.notifier.pop(manager_id)
+
+    def _create_worker_manager(self, manager_id, hello, reader, writer):
+        mgr = self._worker_managers[manager_id] = WorkerManagerProxy(
+            manager_id,
+            hello,
+            reader,
+            writer,
+            lambda: self._remove_worker_manager(manager_id),
+        )
+        self.notifier[manager_id] = {
+            "id": manager_id,
+            "description": mgr.description,
+        }
+        log.info(
+            f"New worker manager connection id={manager_id} description={mgr.description}"
+        )
+
     def get_ports(self):
         return [
             socket.getsockname()[1]
@@ -52,16 +78,7 @@ class WorkerManagerDB:
             )
 
         manager_id = hello["manager_id"]
-        mgr = self._worker_managers[manager_id] = WorkerManagerProxy(
-            manager_id,
-            hello,
-            reader,
-            writer,
-            lambda: self._worker_managers.pop(manager_id, None)
-        )
-        log.info(
-            f"New worker manager connection id={manager_id} description={mgr.description}"
-        )
+        self._create_worker_manager(manager_id, hello, reader, writer)
 
     def get_proxy(self, worker_manager_id) -> WorkerManagerProxy:
         try:

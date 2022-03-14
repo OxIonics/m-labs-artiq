@@ -1,8 +1,12 @@
+from __future__ import annotations
+
+import dataclasses
 import logging
 import asyncio
 import os
 from functools import partial
 from collections import OrderedDict
+from typing import Any, Dict, Optional
 import urllib.parse
 
 from PyQt5 import QtCore, QtGui, QtWidgets
@@ -11,7 +15,6 @@ import h5py
 from sipyco import pyon
 
 from artiq.gui.entries import procdesc_to_entry, ScanEntry
-from artiq.gui.fuzzy_select import FuzzySelectWidget
 from artiq.gui.tools import LayoutWidget, log_level_to_name, get_open_file_name
 
 
@@ -40,6 +43,16 @@ class _WheelFilter(QtCore.QObject):
             event.ignore()
             return True
         return False
+
+
+@dataclasses.dataclass
+class ExpUrlResolution:
+    repo: bool
+    worker_manager_id: Optional[str]
+    file: str
+    class_name: str
+    repo_experiment_description: Optional[Dict[str, Any]] = None
+    repo_experiment_id: Optional[str] = None
 
 
 class _ArgumentEditor(QtWidgets.QTreeWidget):
@@ -239,11 +252,32 @@ log_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
 class _ExperimentDock(QtWidgets.QMdiSubWindow):
     sigClosed = QtCore.pyqtSignal()
 
-    def __init__(self, manager, expurl):
+    @staticmethod
+    def _make_title(manager: ExperimentManager, expurl):
+        exp = manager.resolve_expurl(expurl)
+        if exp.worker_manager_id is None:
+            worker_manager_desc = "-- builtin --"
+        elif exp.worker_manager_id == manager.local_worker_manager_id:
+            worker_manager_desc = "-- local --"
+        else:
+            try:
+                worker_manager_desc = manager.worker_managers[exp.worker_manager_id]["description"]
+            except KeyError:
+                worker_manager_desc = exp.worker_manager_id
+
+        if exp.repo:
+            exp_desc = exp.repo_experiment_id
+        else:
+            exp_desc = f"{exp.file}#{exp.class_name}"
+
+        return f"{worker_manager_desc} :: {exp_desc}"
+
+    def __init__(self, manager: ExperimentManager, expurl):
         QtWidgets.QMdiSubWindow.__init__(self)
         qfm = QtGui.QFontMetrics(self.font())
         self.resize(100*qfm.averageCharWidth(), 30*qfm.lineSpacing())
-        self.setWindowTitle(expurl)
+
+        self.setWindowTitle(self._make_title(manager, expurl))
         self.setWindowIcon(QtWidgets.QApplication.style().standardIcon(
             QtWidgets.QStyle.SP_FileDialogContentsView))
 
@@ -510,60 +544,6 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
         self.hdf5_load_directory = state["hdf5_load_directory"]
 
 
-class _QuickOpenDialog(QtWidgets.QDialog):
-    """Modal dialog for opening/submitting experiments from a
-    FuzzySelectWidget."""
-    closed = QtCore.pyqtSignal()
-
-    def __init__(self, manager):
-        super().__init__(manager.main_window)
-        self.setModal(True)
-
-        self.manager = manager
-
-        self.setWindowTitle("Quick open...")
-
-        layout = QtWidgets.QGridLayout(self)
-        layout.setSpacing(0)
-        layout.setContentsMargins(0, 0, 0, 0)
-        self.setLayout(layout)
-
-        # Find matching experiment names. Open experiments are preferred to
-        # matches from the repository to ease quick window switching.
-        open_exps = list(self.manager.open_experiments.keys())
-        repo_exps = set("repo:" + k
-                        for k in self.manager.explist.keys()) - set(open_exps)
-        choices = [(o, 100) for o in open_exps] + [(r, 0) for r in repo_exps]
-
-        self.select_widget = FuzzySelectWidget(choices)
-        layout.addWidget(self.select_widget)
-        self.select_widget.aborted.connect(self.close)
-        self.select_widget.finished.connect(self._open_experiment)
-
-        font_metrics = QtGui.QFontMetrics(self.select_widget.line_edit.font())
-        self.select_widget.setMinimumWidth(font_metrics.averageCharWidth() * 70)
-
-    def done(self, r):
-        if self.select_widget:
-            self.select_widget.abort()
-        self.closed.emit()
-        QtWidgets.QDialog.done(self, r)
-
-    def _open_experiment(self, exp_name, modifiers):
-        if modifiers & QtCore.Qt.ControlModifier:
-            try:
-                self.manager.submit(exp_name)
-            except:
-                # Not all open_experiments necessarily still exist in the explist
-                # (e.g. if the repository has been re-scanned since).
-                logger.warning("failed to submit experiment '%s'",
-                               exp_name,
-                               exc_info=True)
-        else:
-            self.manager.open_experiment(exp_name)
-        self.close()
-
-
 class ExperimentManager:
     #: Registry for custom argument editor classes, indexed by the experiment
     #: argument_ui key string.
@@ -571,6 +551,7 @@ class ExperimentManager:
 
     def __init__(self, main_window, dataset_sub,
                  explist_sub, schedule_sub,
+                 worker_manager_sub,
                  schedule_ctl, experiment_db_ctl,
                  local_worker_manager_id,
                  ):
@@ -591,15 +572,10 @@ class ExperimentManager:
         explist_sub.add_setmodel_callback(self.set_explist_model)
         self.schedule = dict()
         schedule_sub.add_setmodel_callback(self.set_schedule_model)
+        self.worker_managers = {}
+        worker_manager_sub.add_setmodel_callback(self.set_worker_manager_model)
 
         self.open_experiments = dict()
-
-        self.is_quick_open_shown = False
-        quick_open_shortcut = QtWidgets.QShortcut(
-            QtCore.Qt.CTRL + QtCore.Qt.Key_P,
-            main_window)
-        quick_open_shortcut.setContext(QtCore.Qt.ApplicationShortcut)
-        quick_open_shortcut.activated.connect(self.show_quick_open)
 
     def set_dataset_model(self, model):
         self.datasets = model
@@ -610,6 +586,9 @@ class ExperimentManager:
     def set_schedule_model(self, model):
         self.schedule = model.backing_store
 
+    def set_worker_manager_model(self, model):
+        self.worker_managers = model.backing_store
+
     def resolve_expurl(self, expurl):
         parsed = urllib.parse.urlparse(expurl)
         urlpath = parsed.path
@@ -618,24 +597,33 @@ class ExperimentManager:
             worker_manager_id = parsed.hostname
             urlpath = urlpath[1:]
         if parsed.scheme == "repo":
-            expinfo = self.explist[urlpath]
-            file = expinfo["file"]
-            class_name = expinfo["class_name"]
-            repository = True
+            expinfo = self.explist[worker_manager_id][urlpath]
+            return ExpUrlResolution(
+                True,
+                worker_manager_id,
+                file=expinfo["file"],
+                class_name=expinfo["class_name"],
+                repo_experiment_description=expinfo,
+                repo_experiment_id=urlpath,
+            )
         elif parsed.scheme == "file":
-            file = urlpath
-            class_name = parsed.fragment
-            repository = False
+            return ExpUrlResolution(
+                False,
+                worker_manager_id,
+                file=urlpath,
+                class_name=parsed.fragment,
+            )
         else:
             raise ValueError("Malformed experiment URL: unrecognised scheme '{}'".format(
                 parsed.scheme
             ))
-        return worker_manager_id, file, class_name, repository
 
     def get_argument_editor_class(self, expurl):
         ui_name = self.argument_ui_names.get(expurl, None)
-        if not ui_name and expurl[:5] == "repo:":
-            ui_name = self.explist.get(expurl[5:], {}).get("argument_ui", None)
+        if not ui_name:
+            exp = self.resolve_expurl(expurl)
+            if exp.repo:
+                ui_name = exp.repo_experiment_description.get("argument_ui", None)
         if ui_name:
             result = self.argument_ui_classes.get(ui_name, None)
             if result:
@@ -654,8 +642,9 @@ class ExperimentManager:
                 "due_date": None,
                 "flush": False
             }
-            if expurl[:5] == "repo:":
-                scheduling.update(self.explist[expurl[5:]]["scheduler_defaults"])
+            exp = self.resolve_expurl(expurl)
+            if exp.repo:
+                scheduling.update(exp.repo_experiment_description["scheduler_defaults"])
             self.submission_scheduling[expurl] = scheduling
             return scheduling
 
@@ -690,10 +679,11 @@ class ExperimentManager:
         if expurl in self.submission_arguments:
             return self.submission_arguments[expurl]
         else:
-            if expurl[:5] != "repo:":
+            exp = self.resolve_expurl(expurl)
+            if not exp.repo:
                 raise ValueError("Submission arguments must be preinitialized "
                                  "when not using repository")
-            class_desc = self.explist[expurl[5:]]
+            class_desc = exp.repo_experiment_description
             return self.initialize_submission_arguments(expurl,
                 class_desc["arginfo"], class_desc.get("argument_ui", None))
 
@@ -736,7 +726,7 @@ class ExperimentManager:
         logger.info("Submitted '%s', RID is %d", expurl, rid)
 
     def submit(self, expurl):
-        worker_manager_id, file, class_name, _ = self.resolve_expurl(expurl)
+        exp = self.resolve_expurl(expurl)
         scheduling = self.get_submission_scheduling(expurl)
         options = self.get_submission_options(expurl)
         arguments = self.get_submission_arguments(expurl)
@@ -748,10 +738,10 @@ class ExperimentManager:
 
         expid = {
             "log_level": options["log_level"],
-            "file": file,
-            "class_name": class_name,
+            "file": exp.file,
+            "class_name": exp.class_name,
             "arguments": argument_values,
-            "worker_manager_id": worker_manager_id,
+            "worker_manager_id": exp.worker_manager_id,
         }
         if "repo_rev" in options:
             expid["repo_rev"] = options["repo_rev"]
@@ -776,33 +766,30 @@ class ExperimentManager:
         logger.info(
             "Requesting termination of all instances "
             "of '%s'", expurl)
-        worker_manager_id, file, class_name, use_repository = self.resolve_expurl(expurl)
-        if worker_manager_id is not None:
-            raise NotImplementedError(
-                "Not implemented for experiments running in worker mangers"
-            )
+        exp = self.resolve_expurl(expurl)
         rids = []
         for rid, desc in self.schedule.items():
             expid = desc["expid"]
-            if use_repository:
+            if exp.repo:
                 repo_match = "repo_rev" in expid
             else:
                 repo_match = "repo_rev" not in expid
             if (repo_match and
-                    expid["file"] == file and
-                    expid["class_name"] == class_name):
+                    expid["file"] == exp.file and
+                    expid["class_name"] == exp.class_name and
+                    expid["worker_manager_id"] == exp.worker_manager_id):
                 rids.append(rid)
         asyncio.ensure_future(self._request_term_multiple(rids))
 
     async def compute_expdesc(self, expurl):
-        worker_manager_id, file, class_name, use_repository = self.resolve_expurl(expurl)
-        if use_repository:
+        exp = self.resolve_expurl(expurl)
+        if exp.repo:
             revision = self.get_submission_options(expurl)["repo_rev"]
         else:
             revision = None
         description = await self.experiment_db_ctl.examine(
-            file, use_repository, revision, worker_manager_id)
-        class_desc = description[class_name]
+            exp.file, exp.repo, revision, exp.worker_manager_id)
+        class_desc = description[exp.class_name]
         return class_desc, class_desc.get("argument_ui", None)
 
     async def open_file(self, file, worker_manager_id=None):
@@ -843,14 +830,3 @@ class ExperimentManager:
         self.argument_ui_names = state.get("argument_uis", {})
         for expurl in state["open_docks"]:
             self.open_experiment(expurl)
-
-    def show_quick_open(self):
-        if self.is_quick_open_shown:
-            return
-
-        self.is_quick_open_shown = True
-        dialog = _QuickOpenDialog(self)
-        def closed():
-            self.is_quick_open_shown = False
-        dialog.closed.connect(closed)
-        dialog.show()

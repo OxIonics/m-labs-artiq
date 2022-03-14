@@ -21,6 +21,7 @@ from sipyco.asyncio_tools import atexit_register_coroutine
 
 from artiq import __artiq_dir__ as artiq_dir, __version__ as artiq_version
 from artiq.consts import CONTROL_PORT, NOTIFY_PORT
+from artiq.dashboard.quick_open_dialog import init_quick_open_dialog
 from artiq.tools import get_user_config_dir
 from artiq.gui.models import ModelSubscriber
 from artiq.gui import state, log
@@ -129,6 +130,10 @@ def main():
     # initialize application
     args = get_argparser().parse_args()
     widget_log_handler = log.init_log(args, "dashboard")
+    if args.verbose == 2:
+        # This is super chatty on debug. Limit it to info unless we get more
+        # than two verbose flags.
+        logging.getLogger("qasync").setLevel(logging.INFO)
 
     if args.plugin_modules:
         for mod in args.plugin_modules:
@@ -168,14 +173,15 @@ def main():
         nonlocal disconnect_reported
         if not disconnect_reported:
             logging.error("connection to master lost, "
-                          "restart dashboard to reconnect")
+                          "restart dashboard to reconnect", exc_info=True)
         disconnect_reported = True
 
     sub_clients = dict()
-    for notifier_name, modelf in (("explist", explorer.Model),
-                                  ("explist_status", explorer.StatusUpdater),
+    for notifier_name, modelf in (("all_explist", explorer.AllExpListModel),
+                                  ("all_explist_status", explorer.AllStatusUpdater),
                                   ("datasets", datasets.Model),
-                                  ("schedule", schedule.Model)):
+                                  ("schedule", schedule.Model),
+                                  ("worker_managers", explorer.WorkerManagerModel)):
         subscriber = ModelSubscriber(notifier_name, modelf,
             report_disconnect)
         loop.run_until_complete(subscriber.connect(
@@ -202,8 +208,9 @@ def main():
     # create UI components
     expmgr = experiments.ExperimentManager(main_window,
                                            sub_clients["datasets"],
-                                           sub_clients["explist"],
+                                           sub_clients["all_explist"],
                                            sub_clients["schedule"],
+                                           sub_clients["worker_managers"],
                                            rpc_clients["schedule"],
                                            rpc_clients["experiment_db"],
                                            local_worker_manager_id)
@@ -211,11 +218,13 @@ def main():
     d_shortcuts = shortcuts.ShortcutsDock(main_window, expmgr)
     smgr.register(d_shortcuts)
     d_explorer = explorer.ExplorerDock(expmgr, d_shortcuts,
-                                       sub_clients["explist"],
-                                       sub_clients["explist_status"],
+                                       sub_clients["all_explist"],
+                                       sub_clients["all_explist_status"],
+                                       sub_clients["worker_managers"],
                                        rpc_clients["schedule"],
                                        rpc_clients["experiment_db"],
-                                       rpc_clients["device_db"])
+                                       rpc_clients["device_db"],
+                                       local_worker_manager_id)
     smgr.register(d_explorer)
 
     d_datasets = datasets.DatasetsDock(sub_clients["datasets"],
@@ -272,6 +281,7 @@ def main():
     if d_log0 is not None:
         main_window.tabifyDockWidget(d_schedule, d_log0)
 
+    init_quick_open_dialog(main_window, d_explorer, expmgr)
 
     if server_name is not None:
         server_description = server_name + " ({})".format(args.server)

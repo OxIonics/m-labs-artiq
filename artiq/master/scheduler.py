@@ -10,8 +10,6 @@ from sipyco.asyncio_tools import TaskObject, Condition
 from artiq.master.experiments import ExperimentDB
 from artiq.master.worker import (Worker, log_worker_exception, ResumeAction,
                                  RunResult)
-from artiq.master.worker_managers import WorkerManagerDB
-from artiq.master.worker_transport import PipeWorkerTransport
 from artiq.tools import asyncio_wait_or_cancel
 
 
@@ -145,11 +143,13 @@ class RunPool:
         # mutates expid to insert head repository revision if None.
         # called through scheduler.
         rid = self.ridc.get()
-        repo = self.experiment_db.get_repo(expid.get("worker_manger_id"))
+        repo = self.experiment_db.get_repo(expid.get("worker_manager_id"))
         if "repo_rev" in expid:
             if expid["repo_rev"] is None:
                 expid["repo_rev"] = repo.cur_rev
-            wd, repo_msg = repo.request_rev(expid["repo_rev"])
+            repo_rev = repo.request_rev(expid["repo_rev"])
+            wd = repo_rev.get_working_dir()
+            repo_msg = repo_rev.get_msg()
         else:
             wd, repo_msg = None, None
         run = Run(rid, pipeline_name, wd, expid, priority, due_date, flush,

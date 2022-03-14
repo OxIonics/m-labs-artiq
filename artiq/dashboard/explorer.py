@@ -2,12 +2,14 @@ import asyncio
 import logging
 import re
 from functools import partial
+from typing import Generic, Optional, TypeVar
 
 from PyQt5 import QtCore, QtWidgets
 from PyQt5.QtWidgets import QFileDialog
 
+from artiq.dashboard.experiments import make_url
 from artiq.gui.tools import LayoutWidget
-from artiq.gui.models import DictSyncTreeSepModel
+from artiq.gui.models import DictSyncModel, DictSyncTreeSepModel
 from artiq.gui.waitingspinnerwidget import QtWaitingSpinner
 
 
@@ -114,13 +116,90 @@ class _OpenFileDialog(QtWidgets.QDialog):
                 QtWidgets.QDialog.accept(self)
 
 
-class Model(DictSyncTreeSepModel):
+Model = TypeVar("Model")
+
+
+class ActiveWorkerManagerModel(Generic[Model]):
+
+    def __init__(self, init):
+        self.backing_store = init
+        self._active_worker_manager_id: Optional[str] = None
+        self._active_model: Optional[Model] = None
+        self._on_model_change_cbs = []
+        self.set_active_worker_manager(None)
+
+    def set_active_worker_manager(self, worker_manager_id):
+        self._active_worker_manager_id = worker_manager_id
+        try:
+            data = self.backing_store[worker_manager_id]
+        except KeyError:
+            model = None
+        else:
+            model = self._make_model(worker_manager_id, data)
+        self._set_model(model)
+
+    def _make_model(self, mgr_id, data) -> Model:
+        raise NotImplementedError()
+
+    def _set_model(self, model: Optional[Model]):
+        self._active_model = model
+
+    @property
+    def active_model(self) -> Model:
+        return self._active_model
+
+    def __getitem__(self, key):
+        if key == self._active_worker_manager_id:
+            if self._active_model is None:
+                raise KeyError(key)
+            return self._active_model
+        else:
+            return self.backing_store[key]
+
+    def __setitem__(self, key, value):
+        self.backing_store[key] = value
+        if key == self._active_worker_manager_id:
+            self._set_model(self._make_model(key, value))
+
+    def __delitem__(self, key):
+        del self.backing_store[key]
+        if key == self._active_worker_manager_id:
+            self._set_model(None)
+
+
+class ExpListModel(DictSyncTreeSepModel):
     def __init__(self, init):
         DictSyncTreeSepModel.__init__(self, "/", ["Experiment"], init)
 
     def convert_tooltip(self, k, v, column):
         return ("<b>File:</b> {file}<br><b>Class:</b> {cls}"
                 .format(file=v["file"], cls=v["class_name"]))
+
+
+class AllExpListModel(ActiveWorkerManagerModel[ExpListModel]):
+
+    def __init__(self, init):
+        self._on_model_change_cbs = []
+        super().__init__(init)
+
+    def add_model_change_cb(self, cb):
+        self._on_model_change_cbs.append(cb)
+
+    def _set_model(self, model):
+        super()._set_model(model)
+        for cb in self._on_model_change_cbs:
+            cb()
+
+    def _make_model(self, mgr_id, data):
+        # ExpListModel effectively copies data. Grab a reference to that copy
+        # so that we see any updates.
+        model = ExpListModel(data)
+        self.backing_store[mgr_id] = model.backing_store
+        return model
+
+    @property
+    def active_explist(self):
+        return self.backing_store[self._active_worker_manager_id]
 
 
 class StatusUpdater:
@@ -142,6 +221,58 @@ class StatusUpdater:
                 self.explorer.update_cur_rev(v)
 
 
+class AllStatusUpdater(ActiveWorkerManagerModel[StatusUpdater]):
+
+    def __init__(self, init):
+        self.explorer = None
+        super().__init__(init)
+
+    def set_explorer(self, explorer):
+        self.explorer = explorer
+        if self._active_model is not None:
+            self._active_model.set_explorer(explorer)
+
+    def _set_model(self, model):
+        if self._active_model is not None:
+            self._active_model.explorer = None
+        super()._set_model(model)
+        if self._active_model is not None and self.explorer is not None:
+            self._active_model.set_explorer(self.explorer)
+
+    def _make_model(self, mgr_id, data):
+        return StatusUpdater(data)
+
+    def has_active_repo_ever_been_scanned(self):
+        return self._active_model is not None
+
+
+class WorkerManagerModel(DictSyncModel):
+
+    def __init__(self, init):
+        init[None] = {
+            "id": None,
+            "description": "-- built in --"
+        }
+        super().__init__(["Description"], init)
+        self.local_worker_manager_id = None
+
+    def sort_key(self, k, v):
+        return v["description"]
+
+    def convert(self, k, v, column, role):
+        if column != 0:
+            raise RuntimeError("Worker manager model expects column to always be 0")
+        if role == QtCore.Qt.UserRole:
+            return v
+        elif role == QtCore.Qt.DisplayRole:
+            if v["id"] == self.local_worker_manager_id:
+                return "-- local --"
+            else:
+                return v["description"]
+        else:
+            return None
+
+
 class WaitingPanel(LayoutWidget):
     def __init__(self):
         LayoutWidget.__init__(self)
@@ -160,8 +291,13 @@ class WaitingPanel(LayoutWidget):
 class ExplorerDock(QtWidgets.QDockWidget):
     def __init__(self, exp_manager, d_shortcuts,
                  explist_sub, explist_status_sub,
-                 schedule_ctl, experiment_db_ctl, device_db_ctl):
+                 worker_manager_sub,
+                 schedule_ctl, experiment_db_ctl, device_db_ctl,
+                 local_worker_manager_id):
         QtWidgets.QDockWidget.__init__(self, "Explorer")
+        self.active_worker_manager_id = None
+        self.local_worker_manager_id = local_worker_manager_id
+        self.experiment_db_ctl = experiment_db_ctl
         self.setObjectName("Explorer")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
                          QtWidgets.QDockWidget.DockWidgetFloatable)
@@ -173,13 +309,19 @@ class ExplorerDock(QtWidgets.QDockWidget):
         self.d_shortcuts = d_shortcuts
         self.schedule_ctl = schedule_ctl
 
-        top_widget.addWidget(QtWidgets.QLabel("Revision:"), 0, 0)
+        top_widget.addWidget(QtWidgets.QLabel("Repo:"), 0, 0)
+        self.repo_select = QtWidgets.QComboBox(self)
+        worker_manager_sub.add_setmodel_callback(self.set_repo_model)
+        self.repo_select.currentIndexChanged.connect(self._repo_selected_changed)
+        top_widget.addWidget(self.repo_select, 0, 1)
+
+        top_widget.addWidget(QtWidgets.QLabel("Revision:"), 1, 0)
         self.revision = QtWidgets.QLabel()
         self.revision.setTextInteractionFlags(QtCore.Qt.TextSelectableByMouse)
-        top_widget.addWidget(self.revision, 0, 1)
+        top_widget.addWidget(self.revision, 1, 1)
 
         self.stack = QtWidgets.QStackedWidget()
-        top_widget.addWidget(self.stack, 1, 0, colspan=2)
+        top_widget.addWidget(self.stack, 2, 0, colspan=2)
 
         self.el_buttons = LayoutWidget()
         self.el_buttons.layout.setContentsMargins(0, 0, 0, 0)
@@ -208,7 +350,7 @@ class ExplorerDock(QtWidgets.QDockWidget):
         submit.clicked.connect(
             partial(self.expname_action, "submit"))
 
-        self.explist_model = Model(dict())
+        self.explist_model = AllExpListModel(dict())
         explist_sub.add_setmodel_callback(self.set_model)
 
         self.el.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
@@ -247,9 +389,7 @@ class ExplorerDock(QtWidgets.QDockWidget):
 
         scan_repository_action = QtWidgets.QAction("Scan repository HEAD",
                                                    self.el)
-        def scan_repository():
-            asyncio.ensure_future(experiment_db_ctl.scan_repository_async())
-        scan_repository_action.triggered.connect(scan_repository)
+        scan_repository_action.triggered.connect(self.scan_repository)
         self.el.addAction(scan_repository_action)
 
         scan_ddb_action = QtWidgets.QAction("Scan device database", self.el)
@@ -274,8 +414,8 @@ class ExplorerDock(QtWidgets.QDockWidget):
 
         self.waiting_panel = WaitingPanel()
         self.stack.addWidget(self.waiting_panel)
-        explist_status_sub.add_setmodel_callback(
-            lambda updater: updater.set_explorer(self))
+        self.status_model = AllStatusUpdater({})
+        explist_status_sub.add_setmodel_callback(self.set_status_model)
 
     def open_local_file(self):
         fn = QFileDialog.getOpenFileName(
@@ -286,14 +426,26 @@ class ExplorerDock(QtWidgets.QDockWidget):
         if fn:
             asyncio.create_task(self.exp_manager.open_local_file(fn))
 
-    def set_model(self, model):
+    def set_model(self, model: AllExpListModel):
+        def on_model_change():
+            self.el.setModel(model.active_model)
+
         self.explist_model = model
-        self.el.setModel(model)
+        self.el.setModel(model.active_model)
+        model.add_model_change_cb(on_model_change)
+
+    def set_status_model(self, model: AllStatusUpdater):
+        self.status_model = model
+        self.status_model.set_explorer(self)
+
+    def set_repo_model(self, model: WorkerManagerModel):
+        model.local_worker_manager_id = self.local_worker_manager_id
+        self.repo_select.setModel(model)
 
     def _get_selected_expname(self):
         selection = self.el.selectedIndexes()
         if selection:
-            return self.explist_model.index_to_key(selection[0])
+            return self.explist_model.active_model.index_to_key(selection[0])
         else:
             return None
 
@@ -301,7 +453,7 @@ class ExplorerDock(QtWidgets.QDockWidget):
         expname = self._get_selected_expname()
         if expname is not None:
             action = getattr(self.exp_manager, action)
-            action("repo:" + expname)
+            action(make_url("repo", self.active_worker_manager_id, expname))
 
     def set_shortcut(self, nr):
         expname = self._get_selected_expname()
@@ -328,3 +480,18 @@ class ExplorerDock(QtWidgets.QDockWidget):
 
     def restore_state(self, state):
         self.current_directory = state["current_directory"]
+
+    def scan_repository(self):
+        asyncio.ensure_future(self.experiment_db_ctl.scan_repository_async(
+            worker_manager_id=self.active_worker_manager_id,
+        ))
+
+    def _repo_selected_changed(self, index):
+        data = self.repo_select.currentData()
+        mgr_id = data["id"]
+        self.active_worker_manager_id = mgr_id
+        self.explist_model.set_active_worker_manager(mgr_id)
+        self.status_model.set_active_worker_manager(mgr_id)
+        if not self.status_model.has_active_repo_ever_been_scanned():
+            self.scan_repository()
+
