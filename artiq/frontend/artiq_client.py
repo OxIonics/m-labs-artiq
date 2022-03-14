@@ -28,6 +28,7 @@ from sipyco.broadcast import Receiver
 from sipyco import common_args, pyon
 
 from artiq.consts import CONTROL_PORT, NOTIFY_PORT
+from artiq.schedule_display import make_exp_source
 from artiq.tools import short_format, parse_arguments
 from artiq import __version__ as artiq_version
 
@@ -263,7 +264,7 @@ def _show_schedule(schedule):
                                                 x[1]["due_date"] or 0,
                                                 x[0]))
         table = PrettyTable(["RID", "Pipeline", "    Status    ", "Prio",
-                             "Due date", "Revision", "File", "Class name"])
+                             "Due date", "Source", "File", "Class name"])
         for rid, v in sorted_schedule:
             row = [rid, v["pipeline"], v["status"], v["priority"]]
             if v["due_date"] is None:
@@ -272,10 +273,7 @@ def _show_schedule(schedule):
                 row.append(time.strftime("%m/%d %H:%M:%S",
                            time.localtime(v["due_date"])))
             expid = v["expid"]
-            if "repo_rev" in expid:
-                row.append(expid["repo_rev"])
-            else:
-                row.append("Outside repo.")
+            row.append(make_exp_source(expid, v.get("repo_msg")))
             row.append(expid["file"])
             if expid["class_name"] is None:
                 row.append("")

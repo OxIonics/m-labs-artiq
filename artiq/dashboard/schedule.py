@@ -6,6 +6,7 @@ import logging
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 from artiq.gui.models import DictSyncModel
+from artiq.schedule_display import make_exp_source
 from artiq.tools import elide
 
 
@@ -18,6 +19,7 @@ class Model(DictSyncModel):
             ["RID", "Pipeline", "Status", "Prio", "Due date",
              "Revision", "File", "Class name"],
             init)
+        self.worker_managers = {}
 
     def sort_key(self, k, v):
         # order by priority, and then by due date and RID
@@ -41,14 +43,9 @@ class Model(DictSyncModel):
                 return time.strftime("%m/%d %H:%M:%S",
                                      time.localtime(v["due_date"]))
         elif column == 5:
-            expid = v["expid"]
-            if "repo_rev" in expid:
-                r = expid["repo_rev"]
-                if v["repo_msg"]:
-                    r += "\n" + elide(v["repo_msg"], 40)
-                return r
-            else:
-                return "Outside repo."
+            return make_exp_source(
+                v["expid"], v.get("repo_msg"), self.worker_managers,
+            )
         elif column == 6:
             return v["expid"]["file"]
         elif column == 7:
@@ -61,7 +58,7 @@ class Model(DictSyncModel):
 
 
 class ScheduleDock(QtWidgets.QDockWidget):
-    def __init__(self, schedule_ctl, schedule_sub):
+    def __init__(self, schedule_ctl, schedule_sub, worker_managers_sub):
         QtWidgets.QDockWidget.__init__(self, "Schedule")
         self.setObjectName("Schedule")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
@@ -93,7 +90,9 @@ class ScheduleDock(QtWidgets.QDockWidget):
         terminate_pipeline.triggered.connect(self.terminate_pipeline_clicked)
         self.table.addAction(terminate_pipeline)
 
+        self.worker_managers = {}
         self.table_model = Model(dict())
+        worker_managers_sub.add_setmodel_callback(self.set_worker_manager_model)
         schedule_sub.add_setmodel_callback(self.set_model)
 
         cw = QtGui.QFontMetrics(self.font()).averageCharWidth()
@@ -109,7 +108,12 @@ class ScheduleDock(QtWidgets.QDockWidget):
 
     def set_model(self, model):
         self.table_model = model
+        self.table_model.worker_managers = self.worker_managers
         self.table.setModel(self.table_model)
+
+    def set_worker_manager_model(self, model):
+        self.worker_managers = model.backing_store
+        self.table_model.worker_managers = self.worker_managers
 
     async def delete(self, rid, graceful):
         if graceful:
