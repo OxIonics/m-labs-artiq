@@ -117,7 +117,9 @@ class Worker:
             return None
 
     def _get_log_source(self):
-        return "worker({},{})".format(self.rid, self.filename)
+        return "worker({}, {},{})".format(
+            self._transport.description(), self.rid, self.filename,
+        )
 
     async def _create_process(self, log_level):
         if self.closed.is_set():
