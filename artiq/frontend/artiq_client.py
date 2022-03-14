@@ -223,7 +223,7 @@ async def _make_worker_manager(args):
     connected = asyncio.get_event_loop().create_future()
 
     def worker_managers_cb(mod, data):
-        if worker_manager_id in data:
+        if worker_manager_id in data and not connected.done():
             connected.set_result(None)
 
     async with AsyncExitStack() as stack:
