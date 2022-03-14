@@ -7,10 +7,10 @@ scanning devices, scheduling experiments, and looking for experiments/devices.
 """
 
 import argparse
+from contextlib import AsyncExitStack, asynccontextmanager, contextmanager
 import logging
 from os.path import abspath
 import socket
-import subprocess
 import uuid
 
 import time
@@ -22,7 +22,7 @@ from dateutil.parser import parse as parse_date
 
 from prettytable import PrettyTable
 
-from sipyco.pc_rpc import Client
+from sipyco.pc_rpc import AsyncioClient, Client
 from sipyco.sync_struct import Subscriber
 from sipyco.broadcast import Receiver
 from sipyco import common_args, pyon
@@ -38,6 +38,29 @@ def clear_screen():
         os.system("cls")
     else:
         sys.stdout.write("\x1b[2J\x1b[H")
+
+
+@contextmanager
+def _rpc_client(args, target):
+    port = CONTROL_PORT if args.port is None else args.port
+    master_client = Client(args.server, port, target)
+
+    try:
+        yield master_client
+    finally:
+        master_client.close_rpc()
+
+
+@asynccontextmanager
+async def _async_rpc_client(args, target):
+    port = CONTROL_PORT if args.port is None else args.port
+    master_client = AsyncioClient()
+    await master_client.connect_rpc(args.server, port, target)
+
+    try:
+        yield master_client
+    finally:
+        master_client.close_rpc()
 
 
 def get_argparser():
@@ -56,6 +79,7 @@ def get_argparser():
     subparsers.required = True
 
     parser_add = subparsers.add_parser("submit", help="submit an experiment")
+    parser_add.set_defaults(func=_action_submit)
     parser_add.add_argument("-p", "--pipeline", default="main", type=str,
                             help="pipeline to run the experiment in "
                                  "(default: %(default)s)")
@@ -101,6 +125,7 @@ def get_argparser():
     parser_delete = subparsers.add_parser("delete",
                                           help="delete an experiment "
                                                "from the schedule")
+    parser_delete.set_defaults(func=_action_delete)
     parser_delete.add_argument("-g", action="store_true",
                                help="request graceful termination")
     parser_delete.add_argument("rid", metavar="RID", type=int,
@@ -108,6 +133,7 @@ def get_argparser():
 
     parser_set_dataset = subparsers.add_parser(
         "set-dataset", help="add or modify a dataset")
+    parser_set_dataset.set_defaults(func=_action_set_dataset)
     parser_set_dataset.add_argument("name", metavar="NAME",
                                     help="name of the dataset")
     parser_set_dataset.add_argument("value", metavar="VALUE",
@@ -121,20 +147,24 @@ def get_argparser():
 
     parser_del_dataset = subparsers.add_parser(
         "del-dataset", help="delete a dataset")
+    parser_del_dataset.set_defaults(func=_action_del_dataset)
     parser_del_dataset.add_argument("name", help="name of the dataset")
 
     parser_show = subparsers.add_parser(
         "show", help="show schedule, log, devices or datasets")
+    parser_show.set_defaults(func=_action_show)
     parser_show.add_argument(
         "what", metavar="WHAT",
         choices=["schedule", "log", "ccb", "devices", "datasets", "explist"],
         help="select object to show: %(choices)s")
 
-    subparsers.add_parser(
+    parser_scan_devices = subparsers.add_parser(
         "scan-devices", help="trigger a device database (re)scan")
+    parser_scan_devices.set_defaults(func=_action_scan_devices)
 
     parser_scan_repos = subparsers.add_parser(
         "scan-repository", help="trigger a repository (re)scan")
+    parser_scan_repos.set_defaults(func=_action_scan_repository)
     parser_scan_repos.add_argument("--async", action="store_true",
                                    help="trigger scan and return immediately")
     parser_scan_repos.add_argument("revision", metavar="REVISION",
@@ -148,6 +178,7 @@ def get_argparser():
 
     parser_ls = subparsers.add_parser(
         "ls", help="list a directory on the master")
+    parser_ls.set_defaults(func=_action_ls)
     parser_ls.add_argument("directory", default="", nargs="?")
     parser_ls.add_argument(
         "--worker-mgr-id",
@@ -158,36 +189,94 @@ def get_argparser():
     return parser
 
 
-def _action_submit(remote, args):
+@asynccontextmanager
+async def _plain_dict_subscriber(master, port, notifier, notify_cb):
+    data = {}
+
+    def init_data(x):
+        data.clear()
+        data.update(x)
+        return data
+
+    subscriber = Subscriber(
+        notifier,
+        init_data,
+        lambda mod: notify_cb(mod, data),
+    )
+    await subscriber.connect(master, port)
+    try:
+        yield data
+    finally:
+        await subscriber.close()
+
+
+@asynccontextmanager
+async def _make_worker_manager(args):
+    worker_manager_id = str(uuid.uuid4())
+    cmd = [
+        sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
+        "--id", worker_manager_id, "--exit-on-idle",
+        socket.gethostname(), args.server,
+    ]
+    if args.verbose:
+        cmd.append("-" + "v" * args.verbose)
+
+    connected = asyncio.get_event_loop().create_future()
+
+    def worker_managers_cb(mod, data):
+        if worker_manager_id in data and not connected.done():
+            connected.set_result(None)
+
+    async with AsyncExitStack() as stack:
+        worker_manager, available_worker_managers = await asyncio.gather(
+            asyncio.create_subprocess_exec(*cmd),
+            stack.enter_async_context(
+                _plain_dict_subscriber(
+                    args.server, NOTIFY_PORT, "worker_managers", worker_managers_cb,
+                )
+            ),
+        )
+
+        try:
+            await connected
+            yield worker_manager_id
+            await worker_manager.wait()
+        finally:
+            if worker_manager.returncode is None:
+                print("Killing worker manager")
+                worker_manager.kill()
+                await asyncio.wait_for(worker_manager.wait(), 1)
+            if worker_manager.returncode is None:
+                print("Worker manager didn't exit")
+            elif worker_manager.returncode != 0:
+                print("Worker exited with non-zero return code")
+
+
+async def _submit(args):
     try:
         arguments = parse_arguments(args.arguments)
     except Exception as err:
         raise ValueError("Failed to parse run arguments") from err
 
-    worker_manager = None
-    if args.start_worker_mgr:
-        worker_manager_id = str(uuid.uuid4())
-        cmd = [
-            sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
-            "--id", worker_manager_id, "--exit-on-idle",
-            socket.gethostname(), args.server,
-        ]
-        if args.verbose:
-            cmd.append("-" + "v" * args.verbose)
-        worker_manager = subprocess.Popen(cmd)
-        # TODO wait for worker manager to be connected in some more reliable way
-        time.sleep(0.5)
-    elif args.worker_mgr_id:
-        worker_manager_id = args.worker_mgr_id
-    else:
-        worker_manager_id = None
+    async with AsyncExitStack() as stack:
+        remote = await stack.enter_async_context(
+            _async_rpc_client(args, "master_schedule")
+        )
+        worker_manager = None
+        if args.start_worker_mgr:
+            worker_manager_id = await stack.enter_async_context(
+                _make_worker_manager(args)
+            )
+        elif args.worker_mgr_id:
+            worker_manager_id = args.worker_mgr_id
+        else:
+            worker_manager_id = None
 
-    if worker_manager_id is None:
-        file = args.file
-    else:
-        file = abspath(args.file)
+        if worker_manager_id is None:
+            file = args.file
+        else:
+            file = abspath(args.file)
 
-    try:
         expid = {
             "log_level": logging.WARNING + args.quiet*10 - args.verbose*10,
             "file": file,
@@ -201,59 +290,80 @@ def _action_submit(remote, args):
             due_date = None
         else:
             due_date = time.mktime(parse_date(args.timed).timetuple())
-        rid = remote.submit(args.pipeline, expid,
-                            args.priority, due_date, args.flush)
+        rid = await remote.submit(args.pipeline, expid,
+                                  args.priority, due_date, args.flush)
         print("RID: {}".format(rid))
 
         if worker_manager:
             worker_manager.wait()
+
+
+def _action_submit(args):
+    loop = asyncio.get_event_loop()
+    try:
+        loop.run_until_complete(_submit(args))
     finally:
-        if worker_manager is not None:
-            if worker_manager.returncode is None:
-                print("Killing worker manager")
-                worker_manager.kill()
-                worker_manager.wait(1)
-            if worker_manager.returncode is None:
-                print("Worker manager didn't exit")
-            elif worker_manager.returncode != 0:
-                print("Worker exited with non-zero return code")
+        loop.close()
 
 
-def _action_delete(remote, args):
-    if args.g:
-        remote.request_termination(args.rid)
+def _action_delete(args):
+    with _rpc_client(args, "master_schedule") as remote:
+        if args.g:
+            remote.request_termination(args.rid)
+        else:
+            remote.delete(args.rid)
+
+
+def _action_set_dataset(args):
+    with _rpc_client(args, "master_dataset_db") as remote:
+        persist = None
+        if args.persist:
+            persist = True
+        if args.no_persist:
+            persist = False
+        remote.set(args.name, pyon.decode(args.value), persist)
+
+
+def _action_del_dataset(args):
+    with _rpc_client(args, "master_dataset_db") as remote:
+        remote.delete(args.name)
+
+
+def _action_scan_devices(args):
+    with _rpc_client(args, "master_device_db") as remote:
+        remote.scan()
+
+
+def _action_scan_repository(args):
+    with _rpc_client(args, "master_experiment_db") as remote:
+        if getattr(args, "async"):
+            remote.scan_repository_async(args.revision, args.worker_mgr_id)
+        else:
+            remote.scan_repository(args.revision, args.worker_mgr_id)
+
+
+def _action_ls(args):
+    with _rpc_client(args, "master_experiment_db") as remote:
+        contents = remote.list_directory(args.directory, args.worker_mgr_id)
+        for name in sorted(contents, key=lambda x: (x[-1] not in "\\/", x)):
+            print(name)
+
+
+def _action_show(args):
+    if args.what == "schedule":
+        _show_dict(args, "schedule", _show_schedule)
+    elif args.what == "log":
+        _show_log(args)
+    elif args.what == "ccb":
+        _show_ccb(args)
+    elif args.what == "devices":
+        _show_dict(args, "devices", _show_devices)
+    elif args.what == "datasets":
+        _show_dict(args, "datasets", _show_datasets)
+    elif args.what == "explist":
+        _show_dict(args, "all_explist", _show_exp_list)
     else:
-        remote.delete(args.rid)
-
-
-def _action_set_dataset(remote, args):
-    persist = None
-    if args.persist:
-        persist = True
-    if args.no_persist:
-        persist = False
-    remote.set(args.name, pyon.decode(args.value), persist)
-
-
-def _action_del_dataset(remote, args):
-    remote.delete(args.name)
-
-
-def _action_scan_devices(remote, args):
-    remote.scan()
-
-
-def _action_scan_repository(remote, args):
-    if getattr(args, "async"):
-        remote.scan_repository_async(args.revision, args.worker_mgr_id)
-    else:
-        remote.scan_repository(args.revision, args.worker_mgr_id)
-
-
-def _action_ls(remote, args):
-    contents = remote.list_directory(args.directory, args.worker_mgr_id)
-    for name in sorted(contents, key=lambda x: (x[-1] not in "\\/", x)):
-        print(name)
+        raise ValueError(f"Unknown show option: {args.what}")
 
 
 def _show_schedule(schedule):
@@ -362,38 +472,7 @@ def _show_ccb(args):
 
 def main():
     args = get_argparser().parse_args()
-    action = args.action.replace("-", "_")
-    if action == "show":
-        if args.what == "schedule":
-            _show_dict(args, "schedule", _show_schedule)
-        elif args.what == "log":
-            _show_log(args)
-        elif args.what == "ccb":
-            _show_ccb(args)
-        elif args.what == "devices":
-            _show_dict(args, "devices", _show_devices)
-        elif args.what == "datasets":
-            _show_dict(args, "datasets", _show_datasets)
-        elif args.what == "explist":
-            _show_dict(args, "all_explist", _show_exp_list)
-        else:
-            raise ValueError(f"Unknown show option: {args.what}")
-    else:
-        port = CONTROL_PORT if args.port is None else args.port
-        target_name = {
-            "submit": "master_schedule",
-            "delete": "master_schedule",
-            "set_dataset": "master_dataset_db",
-            "del_dataset": "master_dataset_db",
-            "scan_devices": "master_device_db",
-            "scan_repository": "master_experiment_db",
-            "ls": "master_experiment_db"
-        }[action]
-        remote = Client(args.server, port, target_name)
-        try:
-            globals()["_action_" + action](remote, args)
-        finally:
-            remote.close_rpc()
+    args.func(args)
 
 
 if __name__ == "__main__":

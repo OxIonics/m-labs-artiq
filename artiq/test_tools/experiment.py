@@ -6,6 +6,7 @@ import os
 import socket
 import sys
 from typing import Type
+import uuid
 
 from sipyco import pc_rpc, sync_struct
 
@@ -98,7 +99,7 @@ async def _plain_dict_subscriber(master, port, notifier, notify_cb):
     subscriber = sync_struct.Subscriber(
         notifier,
         init_data,
-        notify_cb,
+        lambda mod: notify_cb(mod, data),
     )
     await subscriber.connect(master, port)
     try:
@@ -181,8 +182,10 @@ async def run_experiment(
 
         rid = None
         complete = asyncio.get_event_loop().create_future()
+        connected = asyncio.get_event_loop().create_future()
+        worker_manager_id = str(uuid.uuid4())
 
-        def schedule_cb(mod):
+        def schedule_cb(mod, _):
             try:
                 log.debug(f"Got schedule update {summarise_mod(mod)}")
                 if (
@@ -196,10 +199,23 @@ async def run_experiment(
                 complete.set_exception(ex)
                 raise
 
-        def dataset_cb(mod):
+        def dataset_cb(mod, _):
             log.debug(f"Got dataset update {summarise_mod(mod)}")
 
-        (_, dataset, worker_manager, dataset_client) = await asyncio.gather(
+        def worker_managers_cb(mod, data):
+            log.debug(f"Got available worker manager update {summarise_mod(mod)}")
+
+            if worker_manager_id in data:
+                connected.set_result(None)
+
+        (
+            _,
+            dataset,
+            available_worker_managers,
+            worker_manager,
+            dataset_client,
+            master_client,
+        ) = await asyncio.gather(
             stack.enter_async_context(
                 _plain_dict_subscriber(master, notify_port, "schedule", schedule_cb)
             ),
@@ -207,10 +223,15 @@ async def run_experiment(
                 _plain_dict_subscriber(master, notify_port, "datasets", dataset_cb)
             ),
             stack.enter_async_context(
+                _plain_dict_subscriber(
+                    master, notify_port, "worker_managers", worker_managers_cb
+                )
+            ),
+            stack.enter_async_context(
                 WorkerManager.context(
                     master,
                     worker_manager_port,
-                    None,
+                    worker_manager_id,
                     f"{socket.gethostname()}-tests",
                     transport_factory=ThreadWorkerTransport,
                 )
@@ -218,21 +239,16 @@ async def run_experiment(
             stack.enter_async_context(
                 _rpc_client(master, control_port, "master_dataset_db"),
             ),
+            stack.enter_async_context(
+                _rpc_client(master, control_port, "master_schedule")
+            ),
         )
 
-        # TODO technically there's a race because we don't know that the master
-        #  has recieved and processed the worker manager connect yet. We
-        #  should have another subscriber to wait for that. But it requires
-        #  server side support that's not done yet.
-        #  At the moment we're likely to get lucky because we have an implicit
-        #  delay in `_submit_experiment` whilst the RPC client connects. If we
-        #  had the capability to subscribe to worker managers I'd be tempted to
-        #  move the connect in to the above gather.
+        await connected
 
         # rid used by notify_cb
         rid = await _submit_experiment(
-            master,
-            control_port,
+            master_client,
             pipeline,
             worker_manager.id,
             experiment_class,
@@ -257,23 +273,22 @@ async def run_experiment(
 
 
 async def _submit_experiment(
-    master, control_port, pipeline, manager_id, experiment_class, arguments, log_level
+    master_client, pipeline, manager_id, experiment_class, arguments, log_level
 ):
-    async with _rpc_client(master, control_port, "master_schedule") as master_client:
-        expid = {
-            "log_level": log_level,
-            "file": os.path.abspath(sys.modules[experiment_class.__module__].__file__),
-            "class_name": experiment_class.__name__,
-            "arguments": arguments,
-            "worker_manager_id": manager_id,
-        }
+    expid = {
+        "log_level": log_level,
+        "file": os.path.abspath(sys.modules[experiment_class.__module__].__file__),
+        "class_name": experiment_class.__name__,
+        "arguments": arguments,
+        "worker_manager_id": manager_id,
+    }
 
-        rid = await master_client.submit(
-            pipeline,
-            expid,
-            -1,  # priority
-            None,  # due_date
-            False,  # flush
-        )
-        log.info(f"Started experiment {experiment_class.__qualname__} with {rid}")
-        return rid
+    rid = await master_client.submit(
+        pipeline,
+        expid,
+        -1,  # priority
+        None,  # due_date
+        False,  # flush
+    )
+    log.info(f"Started experiment {experiment_class.__qualname__} with {rid}")
+    return rid
