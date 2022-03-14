@@ -359,3 +359,6 @@ class ManagedWorkerTransport(WorkerTransport):
 
     async def close(self, term_timeout, rid):
         return await self._proxy.close_worker(self._id, term_timeout, rid)
+
+    def description(self):
+        return self._proxy.description

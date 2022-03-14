@@ -27,6 +27,9 @@ class WorkerTransport:
     async def close(self, term_timeout: float, rid: str):
         raise NotImplementedError()
 
+    def description(self):
+        raise NotImplementedError()
+
 
 async def _decode_iter(input: AsyncIterator[bytes]) -> AsyncIterator[str]:
     async for line in input:
@@ -108,3 +111,6 @@ class PipeWorkerTransport(WorkerTransport):
 
     async def recv(self):
         return await self.ipc.readline()
+
+    def description(self):
+        return "builtin"
