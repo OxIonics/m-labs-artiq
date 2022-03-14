@@ -49,6 +49,10 @@ class WorkerInternalException(Exception):
     pass
 
 
+class WorkerExit(Exception):
+    pass
+
+
 def log_worker_exception():
     exc, _, _ = sys.exc_info()
     if exc is WorkerInternalException:
@@ -88,6 +92,9 @@ class Worker:
         self.watchdogs = dict()  # wid -> expiration (using time.monotonic)
 
         self._created = False
+        self._in_progress_action = None
+        self._handle_worker_requests_task = None
+        self._pending_exception = None
         self.closed = asyncio.Event()
 
     def create_watchdog(self, t):
@@ -120,6 +127,7 @@ class Worker:
         (stdout, stderr) = await self._transport.create(self.rid, log_level)
 
         self._created = True
+        self._handle_worker_requests_task = asyncio.create_task(self._handle_worker_requests())
         asyncio.create_task(_iterate_logs(self._get_log_source, "stdout", stdout))
         asyncio.create_task(_iterate_logs(self._get_log_source, "stderr", stderr))
 
@@ -129,10 +137,41 @@ class Worker:
 
         This method should always be called by the user to clean up, even if
         build() or examine() raises an exception."""
-        try:
-            await self._transport.close(term_timeout, self.rid)
-        finally:
-            self.closed.set()
+        self.closed.set()
+        # We want to explicitly fail any in progress action here so that
+        # there's an explicit message that this is the reason for action
+        # failure. Otherwise we might get a worker exited message instead
+        # that could be confusing.
+        if self._in_progress_action:
+            # Raise and catch to stick this line on the attached stack trace
+            try:
+                raise WorkerError(
+                    f"Action cancelled by worker close (RID {self.rid})"
+                )
+            except WorkerError as ex:
+                self._in_progress_action.set_exception(ex)
+                self._in_progress_action = None
+        await self._transport.close(term_timeout, self.rid)
+        # If _handle_worker_requests_task then we didn't complete create
+        if self._handle_worker_requests_task is not None:
+            # This is likely to be unnecessary, because the send/recv calls will
+            # get cancelled or return closed when the underlying transport is
+            # closed. But it seems logically coherent to explicitly cancel this
+            # here.
+            self._handle_worker_requests_task.cancel()
+            try:
+                await self._handle_worker_requests_task
+            except asyncio.CancelledError:
+                pass
+        if self._pending_exception:
+            # This exception is probably irrelevant to the continued functioning
+            # of the service but it seems incautious to leave unreported
+            # exceptions.
+            logger.warning(
+                "Pending exception left after worker close",
+                exc_info=self._pending_exception,
+            )
+            self._pending_exception = None
 
     async def _send(self, obj, cancellable=True):
         line = pyon.encode(obj)
@@ -155,77 +194,151 @@ class Worker:
 
     async def _recv(self, timeout):
         fs = await asyncio_wait_or_cancel(
-            [self._transport.recv(), self.closed.wait()],
+            [self._transport.recv()],
             timeout=timeout, return_when=asyncio.FIRST_COMPLETED)
         if all(f.cancelled() for f in fs):
             raise WorkerTimeout(
-                "Timeout receiving data from worker (RID {})".format(self.rid))
-        if self.closed.is_set():
-            raise WorkerError(
-                "Receiving data from worker cancelled (RID {})".format(
-                    self.rid))
+                "Timeout receiving data from worker (RID {})".format(self.rid)
+            )
         line = fs[0].result()
         if not line:
-            raise WorkerError(
-                "Worker ended while attempting to receive data (RID {})".
-                format(self.rid))
+            raise WorkerExit
         try:
             obj = pyon.decode(line.decode())
         except:
-            raise WorkerError("Worker sent invalid PYON data (RID {})".format(
-                self.rid))
+            raise WorkerError(
+                "Worker sent invalid PYON data (RID {})".format(
+                    self.rid
+                )
+            )
         return obj
+
+    def _complete_action(self, result):
+        if self._in_progress_action is None:
+            raise RuntimeError(
+                "Unexpected action completion (RID {})".format(self.rid),
+            )
+        self._in_progress_action.set_result(result)
+        self._in_progress_action = None
 
     async def _handle_worker_requests(self):
         while True:
             try:
-                obj = await self._recv(self.watchdog_time())
-            except WorkerTimeout:
-                raise WorkerWatchdogTimeout
-            action = obj["action"]
-            if action == "completed":
-                return RunResult.completed
-            elif action == "idle":
-                is_idle = obj["kwargs"]["is_idle"]
-                return RunResult.idle if is_idle else RunResult.running
-            elif action == "pause":
-                return RunResult.running
-            elif action == "exception":
-                raise WorkerInternalException
-            elif action == "create_watchdog":
-                func = self.create_watchdog
-            elif action == "delete_watchdog":
-                func = self.delete_watchdog
-            elif action == "register_experiment":
-                func = self.register_experiment
-            else:
-                func = self.handlers[action]
-            try:
-                if asyncio.iscoroutinefunction(func):
-                    data = (await func(*obj["args"], **obj["kwargs"]))
+                try:
+                    obj = await self._recv(self.watchdog_time())
+                except WorkerTimeout:
+                    raise WorkerWatchdogTimeout
+
+                action = obj["action"]
+                if action in ("completed", "idle", "pause"):
+
+                    if action == "completed":
+                        result = RunResult.completed
+                    elif action == "idle":
+                        is_idle = obj["kwargs"]["is_idle"]
+                        result = RunResult.idle if is_idle else RunResult.running
+                    elif action == "pause":
+                        result = RunResult.running
+                    else:
+                        raise RuntimeError("unreachable")
+
+                    self._complete_action(result)
+                    continue
+                elif action == "exception":
+                    raise WorkerInternalException
+                elif action == "create_watchdog":
+                    func = self.create_watchdog
+                elif action == "delete_watchdog":
+                    func = self.delete_watchdog
+                elif action == "register_experiment":
+                    func = self.register_experiment
                 else:
-                    data = func(*obj["args"], **obj["kwargs"])
-                reply = {"status": "ok", "data": data}
-            except:
-                reply = {
-                    "status": "failed",
-                    "exception": current_exc_packed()
-                }
-            await self._send(reply)
+                    func = self.handlers[action]
+                try:
+                    if asyncio.iscoroutinefunction(func):
+                        data = (await func(*obj["args"], **obj["kwargs"]))
+                    else:
+                        data = func(*obj["args"], **obj["kwargs"])
+                    reply = {"status": "ok", "data": data}
+                except:
+                    reply = {
+                        "status": "failed",
+                        "exception": current_exc_packed()
+                    }
+                await self._send(reply, cancellable=False)
+            except WorkerExit:
+                logger.debug(f"Worker receive loop exiting due to worker exit (RID {self.rid}")
+                if self._in_progress_action:
+                    # Raise and catch to stick this line on the attached stack trace
+                    try:
+                        raise WorkerError(
+                            f"Worker ended whilst attempting to execute action (RID {self.rid})"
+                        )
+                    except WorkerError as ex:
+                        self._in_progress_action.set_exception(ex)
+                        self._in_progress_action = None
+                break
+            except asyncio.CancelledError:
+                logger.debug(
+                    f"Worker receive loop exiting due to cancel (RID {self.rid}"
+                )
+                if self._in_progress_action:
+                    # We only expect a CancelledError when the worker is being
+                    # closed and we should have already stopped in progress
+                    # actions in close.
+                    logger.warning(
+                        f"Unexpected in-progress action when request handler "
+                        f"cancelled (RID {self.rid}"
+                    )
+                    # Raise and catch to stick this line on the attached stack trace
+                    try:
+                        raise WorkerError(
+                            f"Worker action cancelled because request handler "
+                            f"cancelled (RID {self.rid})"
+                        )
+                    except WorkerError as ex:
+                        self._in_progress_action.set_exception(ex)
+                        self._in_progress_action = None
+                raise
+            except Exception as ex:
+                if self._in_progress_action is not None:
+                    self._in_progress_action.set_exception(ex)
+                    self._in_progress_action = None
+                else:
+                    self._pending_exception = ex
 
     async def _worker_action(self, obj, timeout=None):
-        if timeout is not None:
-            self.watchdogs[-1] = time.monotonic() + timeout
+        if self._pending_exception:
+            ex = self._pending_exception
+            self._pending_exception = None
+            raise ex
+        if self.closed.is_set():
+            raise WorkerError(
+                f"Worker is closed can't perform action {obj['action']} (RID {self.rid})",
+            )
+        if self._in_progress_action:
+            raise WorkerError(
+                f"Worker may only have one action in progress at a time (RID {self.rid})"
+            )
         try:
+            self._in_progress_action = asyncio.get_event_loop().create_future()
             await self._send(obj)
-            try:
-                completed = await self._handle_worker_requests()
-            except WorkerTimeout:
-                raise WorkerWatchdogTimeout
-        finally:
-            if timeout is not None:
-                del self.watchdogs[-1]
-        return completed
+            return await asyncio.wait_for(
+                self._in_progress_action, timeout=timeout,
+            )
+
+        # If either of these exceptions occur we had better close this worker
+        # now or else it's going to get very confused about whether it's running
+        # an action or not. This has been the case longer than this commenting
+        # drawing attention to it.
+        except asyncio.CancelledError:
+            # _in_progress_action has been cancelled
+            self._in_progress_action = None
+            raise
+        except asyncio.TimeoutError:
+            # _in_progress_action has been cancelled
+            self._in_progress_action = None
+            raise WorkerWatchdogTimeout()
 
     async def build(self, rid, pipeline_name, wd, expid, priority,
                     timeout=15.0):

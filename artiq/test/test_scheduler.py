@@ -189,7 +189,9 @@ class SchedulerCase(unittest.TestCase):
     def test_pending_priority(self):
         """Check due dates take precedence over priorities when waiting to
         prepare."""
-        handlers = {}
+        handlers = {
+            "store_results": lambda t, f, d: None,
+        }
         scheduler = self.make_scheduler(handlers)
         handlers["scheduler_check_pause"] = scheduler.check_pause
 
@@ -638,7 +640,6 @@ class SchedulerCase(unittest.TestCase):
 
     def test_idle_timeout(self):
         """Check that blocking is_idle_callback times out"""
-        loop = self.loop
         scheduler, status_events, flags = self._make_scheduler_for_idle_test()
 
         # Submit empty experiment with lower priority.
