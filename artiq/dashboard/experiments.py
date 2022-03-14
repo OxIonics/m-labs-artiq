@@ -767,10 +767,6 @@ class ExperimentManager:
             "Requesting termination of all instances "
             "of '%s'", expurl)
         exp = self.resolve_expurl(expurl)
-        if exp.worker_manager_id is not None:
-            raise NotImplementedError(
-                "Not implemented for experiments running in worker mangers"
-            )
         rids = []
         for rid, desc in self.schedule.items():
             expid = desc["expid"]
@@ -780,7 +776,8 @@ class ExperimentManager:
                 repo_match = "repo_rev" not in expid
             if (repo_match and
                     expid["file"] == exp.file and
-                    expid["class_name"] == exp.class_name):
+                    expid["class_name"] == exp.class_name and
+                    expid["worker_manager_id"] == exp.worker_manager_id):
                 rids.append(rid)
         asyncio.ensure_future(self._request_term_multiple(rids))
 
