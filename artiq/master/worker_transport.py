@@ -31,9 +31,9 @@ class WorkerTransport:
         raise NotImplementedError()
 
 
-async def _decode_iter(input: AsyncIterator[bytes]) -> AsyncIterator[str]:
+async def _output_to_iter(input: AsyncIterator[bytes]) -> AsyncIterator[str]:
     async for line in input:
-        yield line.decode()
+        yield line.decode().rstrip("\r\n")
 
 
 class PipeWorkerTransport(WorkerTransport):
@@ -53,8 +53,8 @@ class PipeWorkerTransport(WorkerTransport):
         self.ipc = ipc
         logger.info(f"Created worker process pid={ipc.process.pid} (RID {rid})")
         return (
-            _decode_iter(ipc.process.stdout),
-            _decode_iter(ipc.process.stderr),
+            _output_to_iter(ipc.process.stdout),
+            _output_to_iter(ipc.process.stderr),
         )
 
     async def close(self, term_timeout, rid):

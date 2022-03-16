@@ -175,6 +175,28 @@ async def test_forward_stderr_from_worker_to_master(worker_pair: ConnectedWorker
     assert stderr == actual
 
 
+async def atake(iter, n):
+    rv = []
+    for _ in range(n):
+        rv.append(await anext(iter))
+    return rv
+
+
+async def test_forward_blank_lines_from_worker_to_master(worker_pair: ConnectedWorker):
+    stderr1 = "Some stderr"
+    stderr2 = "Some more"
+
+    worker_pair.worker.put_stderr(stderr1)
+    worker_pair.worker.put_stderr("")
+    worker_pair.worker.put_stderr(stderr2)
+
+    actual = await wait_for(atake(worker_pair.forwarded_stderr, 3))
+
+    assert actual == [
+        stderr1, "", stderr2,
+    ]
+
+
 async def test_closing_worker(worker_pair: ConnectedWorker):
 
     await wait_for(worker_pair.master.close(1, 10))
