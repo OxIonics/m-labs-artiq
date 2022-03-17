@@ -60,6 +60,8 @@ class TestExperiment(EnvExperiment):
         # super init calls build so we want to wrap it first
         super().__init__(managers_or_parent, *args, **kwargs)
 
+        self.set_test_data("build", "ok")
+
     def set_test_data(self, key, value):
         # If we did this in build and relied on the child class calling our
         # build and that didn't happen for whatever reason, then we would
@@ -268,6 +270,12 @@ async def run_experiment(
 
         if "exception" in data:
             raise ExperimentFailure(data)
+
+        if data.get("build") != "ok":
+            raise RuntimeError(
+                "Failed to build the experiment. Maybe import errors? "
+                "Experiment test modules mustn't contain relative imports"
+            )
 
         return data
 
