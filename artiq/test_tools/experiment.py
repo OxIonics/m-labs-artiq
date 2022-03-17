@@ -131,9 +131,9 @@ def summarise_mod(mod):
 
 
 async def _clean_datasets(dataset_client, dataset, rid):
-    for key in dataset:
+    for key in list(dataset):
         if key.startswith(f"data.{rid}."):
-            dataset_client.delete(key)
+            await dataset_client.delete(key)
 
 
 async def run_experiment(
