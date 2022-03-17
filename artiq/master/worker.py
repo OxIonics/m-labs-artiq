@@ -63,13 +63,12 @@ def log_worker_exception():
 
 async def _iterate_logs(source_cb, stream_name, log_lines: AsyncIterator[str]):
     # Heavily inspired by sipyco.logging_tools.LogParser.stream_task but this
-    # will work with any AsyncIterator not just StreamReaders
+    # will work with any AsyncIterator not just StreamReaders and it expects the
+    # iterator to terminate at the end and newlines to already be stripped.
     log_parser = LogParser(source_cb)
     async for entry in log_lines:
         try:
-            if not entry:
-                break
-            log_parser.line_input(entry.rstrip("\r\n"))
+            log_parser.line_input(entry)
         except:
             logger.debug("exception in log forwarding", exc_info=True)
             break

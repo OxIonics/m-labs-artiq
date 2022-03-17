@@ -334,9 +334,6 @@ class WorkerManager:
     ):
         log_parser = LogParser(lambda: worker_id)
         async for entry in output:
-            if not entry:
-                break
-            entry = entry.rstrip("\r\n")
             try:
                 log_parser.line_input(entry)
             except:
