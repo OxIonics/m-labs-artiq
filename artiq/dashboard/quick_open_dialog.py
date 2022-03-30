@@ -1,3 +1,4 @@
+import itertools
 import logging
 
 from PyQt5 import QtGui, QtWidgets
@@ -5,7 +6,7 @@ from qasync import QtCore
 
 from artiq.dashboard.experiments import ExperimentManager, make_url
 from artiq.dashboard.explorer import ExplorerDock
-from artiq.gui.fuzzy_select import FuzzySelectWidget
+from artiq.gui.fuzzy_select import FuzzyChoice, FuzzySelectWidget
 
 logger = logging.getLogger(__name__)
 _is_quick_open_shown = False
@@ -64,20 +65,25 @@ class _QuickOpenDialog(QtWidgets.QDialog):
             make_url("repo", active_worker_manager_id, k)
             for k in self.manager.explist[active_worker_manager_id].keys()
         ) - set(open_exps)
-        choices = [
-            (url,
-             exp.repo_experiment_id if exp.repo else f"{exp.file}#{exp.class_name}",
-             100,
-             )
-            for url in open_exps
-            if (exp := manager.resolve_expurl(url)).worker_manager_id == active_worker_manager_id
-        ] + [
-            (url,
-             manager.resolve_expurl(url).repo_experiment_id,
-             0,
-             )
-            for url in repo_exps
-        ]
+        choices = itertools.chain(
+            (
+                FuzzyChoice(
+                    url,
+                    exp.repo_experiment_id if exp.repo else f"{exp.file}#{exp.class_name}",
+                    100,
+                )
+                for url in open_exps
+                if (exp := manager.resolve_expurl(url)).worker_manager_id == active_worker_manager_id
+            ),
+            (
+                FuzzyChoice(
+                    url,
+                    manager.resolve_expurl(url).repo_experiment_id,
+                    0,
+                )
+                for url in repo_exps
+            )
+        )
 
         self.select_widget = FuzzySelectWidget(choices)
         layout.addWidget(self.select_widget)
