@@ -214,8 +214,8 @@ class WorkerManagerProxy:
         if workers:
             (_, pending) = await asyncio.wait(
                 [worker.recv_queue.put("") for worker in workers] +
-                [worker.stdout_queue.put("") for worker in workers] +
-                [worker.stderr_queue.put("") for worker in workers],
+                [worker.stdout_queue.put(None) for worker in workers] +
+                [worker.stderr_queue.put(None) for worker in workers],
                 timeout=0.5,
                 )
             if pending:
