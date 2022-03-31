@@ -1,10 +1,25 @@
 import re
 
 from functools import partial
-from typing import List, Tuple
+from typing import Iterable, List, Tuple, Union
 from PyQt5 import QtCore, QtWidgets
 
 from artiq.gui.tools import LayoutWidget
+
+
+class FuzzyChoice:
+
+    @classmethod
+    def compat_from_tuple(cls, vals):
+        return cls(vals[0], vals[0], vals[1])
+
+    def __init__(self, value, label, weight):
+        self.value = value
+        self.label = label
+        self.weight = weight
+
+
+IntoFuzzyChoice = Union[Tuple[str, int], FuzzyChoice]
 
 
 class FuzzySelectWidget(LayoutWidget):
@@ -22,7 +37,7 @@ class FuzzySelectWidget(LayoutWidget):
     finished = QtCore.pyqtSignal(str, int)
 
     def __init__(self,
-                 choices: List[Tuple[str, str, int]] = [],
+                 choices: Iterable[IntoFuzzyChoice] = (),
                  entry_count_limit: int = 10,
                  *args):
         """
@@ -50,6 +65,7 @@ class FuzzySelectWidget(LayoutWidget):
         self.line_edit.installEventFilter(escape_filter)
 
         self.menu = None
+        self.choices: List[FuzzyChoice] = []
 
         self.update_when_text_changed = True
         self.menu_typing_filter = None
@@ -59,10 +75,14 @@ class FuzzySelectWidget(LayoutWidget):
 
         self.set_choices(choices)
 
-    def set_choices(self, choices: List[Tuple[str, str, int]]) -> None:
+    def set_choices(self, choices: Iterable[IntoFuzzyChoice]) -> None:
         """Update the list of choices available to the user."""
+        self.choices = [
+            x if isinstance(x, FuzzyChoice) else FuzzyChoice.compat_from_tuple(x)
+            for x in choices
+        ]
         # Keep sorted in the right order for when the query is empty.
-        self.choices = sorted(choices, key=lambda a: (a[2], a[0]))
+        self.choices.sort(key=lambda a: (a.weight, a.value))
         if self.menu:
             self._update_menu()
 
@@ -198,24 +218,26 @@ class FuzzySelectWidget(LayoutWidget):
         # all the (non-greedy) wildcards.
         if not query:
             suggestions = [
-                (-weight, 0, label, url)
-                for url, label, weight in self.choices
+                (-c.weight, 0, c.label, c.value)
+                for c in self.choices
             ]
         else:
             suggestions = []
             pattern_str = ".*?".join(map(re.escape, query))
             pattern = re.compile(pattern_str, flags=re.IGNORECASE)
-            for url, label, weight in self.choices:
+            for c in self.choices:
                 matches = []
                 # Manually loop over shortest matches at each position;
                 # re.finditer() only returns non-overlapping matches.
                 pos = 0
                 while True:
-                    r = pattern.search(label, pos=pos)
+                    r = pattern.search(c.label, pos=pos)
                     if not r:
                         break
                     start, stop = r.span()
-                    matches.append((stop - start - weight, start, label, url))
+                    matches.append(
+                        (stop - start - c.weight, start, c.label, c.value)
+                    )
                     pos = start + 1
                 if matches:
                     suggestions.append(min(matches))
