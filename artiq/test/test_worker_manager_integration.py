@@ -197,6 +197,21 @@ async def test_forward_blank_lines_from_worker_to_master(worker_pair: ConnectedW
     ]
 
 
+async def acollect(iter):
+    return [x async for x in iter]
+
+
+async def test_termination_of_forwarding_from_worker_to_master(worker_pair: ConnectedWorker):
+    last_err = "Last error message"
+
+    worker_pair.worker.put_stderr(last_err)
+    worker_pair.worker.put_stderr(None)
+
+    actual = await wait_for(acollect(worker_pair.forwarded_stderr))
+
+    assert actual == [last_err]
+
+
 async def test_closing_worker(worker_pair: ConnectedWorker):
 
     await wait_for(worker_pair.master.close(1, 10))
