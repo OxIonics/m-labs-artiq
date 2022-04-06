@@ -146,6 +146,7 @@ class WorkerManagerProxy:
         self._workers: Dict[str, _ManagedWorkerState] = {}
         self._inprogress_scans: Dict[str, asyncio.Future] = {}
         self._on_close: List[Callable[[], None]] = [detach]
+        self._closed = False
 
     @property
     def id(self):
@@ -196,6 +197,7 @@ class WorkerManagerProxy:
             await self._close()
 
     async def _close(self):
+        self._closed = True
         for cb in self._on_close:
             cb()
         workers = list(self._workers.values())
@@ -271,6 +273,20 @@ class WorkerManagerProxy:
     async def create_worker(
             self, worker_id, rid, log_level
     ) -> Tuple[AsyncIterator, AsyncIterator]:
+        if self._closed:
+            # It's possible if we're busy that:
+            # * receive scheduler.submit, which creates a ManagedWorkerTransport
+            #   for experiment RID=X
+            # * The connection to the worker manager fails and this is marked as
+            #   closed
+            # * The experiment RID=X gets to the build stage. build calls this
+            # When that happens we need to ensure that `close_worker` can be
+            # called successfully. This is achieved by never adding this worker
+            # to the `_workers` dict so that `close_worker` short circuits.
+            raise RuntimeError(
+                f"WorkerManager {self._id} closed cannot create worker "
+                f"{worker_id} (RID {rid})"
+            )
         state = self._workers[worker_id] = _ManagedWorkerState()
         await self._send({
             "action": "create_worker",

@@ -226,3 +226,32 @@ async def test_worker_closing_unexpectedly_forwarded(worker_pair: ConnectedWorke
     actual = await wait_for(worker_pair.master.recv())
 
     assert actual == ""
+
+
+async def test_late_worker_create_and_then_close(worker_manager_db, worker_manager_port):
+    manager_id = str(uuid.uuid4())
+    description = "Test workers"
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport
+    ) as worker_manager:
+        await wait_for(lambda: assert_num_connection(worker_manager_db))
+
+        proxy = worker_manager_db.get_proxy(worker_manager.id)
+        transport = proxy.get_transport()
+
+    # Ensure that the proxy has noticed that the worker manager has gone away.
+    await asyncio.wait_for(proxy._run_task, timeout=1.0)
+
+    with pytest.raises(Exception) as exc_info:
+        await transport.create("test", logging.DEBUG)
+
+    logging.info("create failed as expected", exc_info=exc_info.value)
+
+    await transport.close(1.0, "test")
+    # Assert no raise in transport.close
+
+    # Defer assertions about exception raised by create until after the more
+    # import implicit assertion that transport.close is successful
+    assert isinstance(exc_info.value, RuntimeError)
