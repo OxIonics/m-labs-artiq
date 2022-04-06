@@ -86,7 +86,7 @@ def decode_message(data):
 
 
 DecodedDump = namedtuple(
-    "DecodedDump", "log_channel dds_onehot_sel messages")
+    "DecodedDump", "log_channel dds_onehot_sel messages error_occurred")
 
 
 def decode_dump(data):
@@ -121,7 +121,7 @@ def decode_dump(data):
     for _ in range(sent_bytes//32):
         messages.append(decode_message(data[position:position+32]))
         position += 32
-    return DecodedDump(log_channel, bool(dds_onehot_sel), messages)
+    return DecodedDump(log_channel, bool(dds_onehot_sel), messages, error_occured)
 
 
 def vcd_codes():
