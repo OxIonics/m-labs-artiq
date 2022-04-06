@@ -86,7 +86,7 @@ def decode_message(data):
 
 
 DecodedDump = namedtuple(
-    "DecodedDump", "log_channel dds_onehot_sel messages error_occurred")
+    "DecodedDump", "log_channel dds_onehot_sel messages overflow_occurred")
 
 
 def decode_dump(data):
@@ -102,15 +102,15 @@ def decode_dump(data):
     # messages are big endian
     parts = struct.unpack(endian + "IQbbb", data[:15])
     (sent_bytes, total_byte_count,
-     error_occured, log_channel, dds_onehot_sel) = parts
+     overflow_occurred, log_channel, dds_onehot_sel) = parts
 
     expected_len = sent_bytes + 15
     if expected_len != len(data):
         raise ValueError("analyzer dump has incorrect length "
                          "(got {}, expected {})".format(
                             len(data), expected_len))
-    if error_occured:
-        logger.warning("error occured within the analyzer, "
+    if overflow_occurred:
+        logger.warning("FIFO overflow error occured within the analyzer, "
                        "data may be corrupted")
     if total_byte_count > sent_bytes:
         logger.info("analyzer ring buffer has wrapped %d times",
@@ -121,7 +121,7 @@ def decode_dump(data):
     for _ in range(sent_bytes//32):
         messages.append(decode_message(data[position:position+32]))
         position += 32
-    return DecodedDump(log_channel, bool(dds_onehot_sel), messages, error_occured)
+    return DecodedDump(log_channel, bool(dds_onehot_sel), messages, overflow_occurred)
 
 
 def vcd_codes():
