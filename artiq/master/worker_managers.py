@@ -277,7 +277,7 @@ class WorkerManagerProxy:
             # It's possible if we're busy that:
             # * receive scheduler.submit, which creates a ManagedWorkerTransport
             #   for experiment RID=X
-            # * The connection to the worker manger fails and this is marked as
+            # * The connection to the worker manager fails and this is marked as
             #   closed
             # * The experiment RID=X gets to the build stage. build calls this
             # When that happens we need to ensure that `close_worker` can be
