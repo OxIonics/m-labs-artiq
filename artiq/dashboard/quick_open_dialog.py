@@ -3,7 +3,12 @@ import logging
 from PyQt5 import QtGui, QtWidgets
 from qasync import QtCore
 
-from artiq.dashboard.experiments import ExperimentManager, make_url
+from artiq.dashboard.experiments import (
+    ExperimentManager,
+    MissingExperimentError,
+    UnknownWorkerManagerError,
+    make_url,
+)
 from artiq.dashboard.explorer import ExplorerDock
 from artiq.gui.fuzzy_select import FuzzySelectWidget
 
@@ -38,6 +43,17 @@ def init_quick_open_dialog(
     quick_open_shortcut.activated.connect(show_quick_open)
 
 
+def _check_experiment_manager_id(manager, url, worker_manager_id):
+    try:
+        exp = manager.resolve_expurl(url)
+    except (MissingExperimentError, UnknownWorkerManagerError):
+        return None
+    if exp.worker_manager_id == worker_manager_id:
+        return exp
+    else:
+        return None
+
+
 class _QuickOpenDialog(QtWidgets.QDialog):
     """Modal dialog for opening/submitting experiments from a
     FuzzySelectWidget."""
@@ -70,7 +86,7 @@ class _QuickOpenDialog(QtWidgets.QDialog):
              100,
              )
             for url in open_exps
-            if (exp := manager.resolve_expurl(url)).worker_manager_id == active_worker_manager_id
+            if (exp := _check_experiment_manager_id(manager, url, active_worker_manager_id))
         ] + [
             (url,
              manager.resolve_expurl(url).repo_experiment_id,
