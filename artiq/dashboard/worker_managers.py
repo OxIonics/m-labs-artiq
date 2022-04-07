@@ -8,6 +8,8 @@ from artiq.gui.models import (
 )
 
 
+# Most of the gets in the class are just needed for backwards compatibility
+# with an earlier version of worker managers.
 class _Model(DictSyncSimpleTableModel):
     def __init__(self, local_worker_manager, init):
         self.local_worker_manager: LocalWorkerManager = local_worker_manager
@@ -15,12 +17,12 @@ class _Model(DictSyncSimpleTableModel):
             [self.RowSpec("ID", lambda k, v: v["id"]),
              self.RowSpec("Local", self._is_local),
              self.RowSpec("Description", lambda k, v: v["description"]),
-             self.RowSpec("Repo root", lambda k, v: v["repo_root"]),
-             self.RowSpec("PID", lambda k, v: v["metadata"]["pid"]),
-             self.RowSpec("Host", lambda k, v: v["metadata"]["hostname"]),
-             self.RowSpec("User", lambda k, v: v["metadata"]["username"]),
-             self.RowSpec("Exe", lambda k, v: v["metadata"]["exe"]),
-             self.RowSpec("Parent", lambda k, v: v["metadata"]["parent"]),
+             self.RowSpec("Repo root", lambda k, v: v.get("repo_root")),
+             self.RowSpec("PID", lambda k, v: v.get("metadata", {}).get("pid")),
+             self.RowSpec("Host", lambda k, v: v.get("metadata", {}).get("hostname")),
+             self.RowSpec("User", lambda k, v: v.get("metadata", {}).get("username")),
+             self.RowSpec("Exe", lambda k, v: v.get("metadata", {}).get("exe")),
+             self.RowSpec("Parent", lambda k, v: v.get("metadata", {}).get("parent")),
              ],
             init,
         )
@@ -28,8 +30,8 @@ class _Model(DictSyncSimpleTableModel):
     def sort_key(self, k, v):
         return (
             v["description"],
-            v["repo_root"],
-            v["metadata"].get("pid"),
+            v.get("repo_root"),
+            v.get("metadata", {}).get("pid"),
             v["id"],
         )
 

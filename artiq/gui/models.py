@@ -74,7 +74,7 @@ class ReplicantModelManager(ModelManager):
 
     def _process_mod(self, mod):
         if mod["action"] == "init":
-            self._create_model(mod["struct"])
+            self._create_model(deepcopy(mod["struct"]))
         else:
             process_mod(self.model, mod)
 
