@@ -216,6 +216,27 @@ class DictSyncModel(QtCore.QAbstractTableModel):
         raise NotImplementedError
 
 
+class DictSyncSimpleTableModel(DictSyncModel):
+
+    class RowSpec:
+        def __init__(self, title, get_display):
+            self.title = title
+            self.get_display = get_display
+
+    def __init__(self, specs, init):
+        super(DictSyncSimpleTableModel, self).__init__(
+            [spec.title for spec in specs],
+            init,
+        )
+        self.specs = specs
+
+    def convert(self, k, v, column, role):
+        if role != QtCore.Qt.DisplayRole:
+            return None
+
+        return self.specs[column].get_display(k, v)
+
+
 class ListSyncModel(QtCore.QAbstractTableModel):
     def __init__(self, headers, init):
         self.headers = headers

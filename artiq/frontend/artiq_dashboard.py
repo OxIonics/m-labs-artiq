@@ -26,8 +26,10 @@ from artiq.dashboard.quick_open_dialog import init_quick_open_dialog
 from artiq.tools import get_user_config_dir
 from artiq.gui.models import ModelSubscriber
 from artiq.gui import state, log
-from artiq.dashboard import (experiments, shortcuts, explorer,
-                             moninj, datasets, schedule, applets_ccb)
+from artiq.dashboard import (
+    experiments, shortcuts, explorer,
+    moninj, datasets, schedule, applets_ccb, worker_managers,
+)
 
 
 def get_argparser():
@@ -240,6 +242,12 @@ def main():
     )
     smgr.register(d_schedule)
 
+    d_worker_managers = worker_managers.WorkerManagerDock(
+        sub_clients["worker_managers"],
+        local_worker_manager,
+    )
+    smgr.register(d_worker_managers)
+
     logmgr = log.LogDockManager(main_window)
     smgr.register(logmgr)
     broadcast_clients["log"].notify_cbs.append(logmgr.append_message)
@@ -255,6 +263,7 @@ def main():
     for d1, d2 in zip(right_docks, right_docks[1:]):
         main_window.tabifyDockWidget(d1, d2)
     main_window.addDockWidget(QtCore.Qt.BottomDockWidgetArea, d_schedule)
+    main_window.tabifyDockWidget(d_schedule, d_worker_managers)
 
     # load/initialize state
     if os.name == "nt":
