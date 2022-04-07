@@ -113,17 +113,33 @@ def main():
         for mod in args.plugin_modules:
             importlib.import_module(mod)
 
+    load_db_file = None
     if args.db_file is None:
-        args.db_file = os.path.join(get_user_config_dir(),
-                           "artiq_dashboard_{server}_{port}.pyon".format(
-                            server=args.server.replace(":","."),
-                            port=args.port_notify))
+        db_file = os.path.join(
+            get_user_config_dir(),
+            "artiq_dashboard_{server}_{port}_{repo_root}.pyon".format(
+                server=args.server.replace(":","."),
+                port=args.port_notify,
+                repo_root=os.getcwd().replace("/", "_").replace("\\", "_").replace(":", "_")
+            ),
+        )
+        old_db_file = os.path.join(
+            get_user_config_dir(),
+            "artiq_dashboard_{server}_{port}.pyon".format(
+                server=args.server.replace(":","."),
+                port=args.port_notify,
+            ),
+        )
+        if not os.path.exists(db_file) and os.path.exists(old_db_file):
+            load_db_file = old_db_file
+    else:
+        db_file = args.db_file
 
     app = QtWidgets.QApplication(["ARTIQ Dashboard"])
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
     atexit.register(loop.close)
-    smgr = state.StateManager(args.db_file)
+    smgr = state.StateManager(db_file, load=load_db_file)
 
     local_worker_manager = LocalWorkerManager(args.server, args.verbose)
     smgr.register(local_worker_manager)

@@ -25,10 +25,11 @@ def _restore_state(obj, state):
 
 
 class StateManager(TaskObject):
-    def __init__(self, filename, autosave_period=30):
+    def __init__(self, filename, autosave_period=30, load=None):
         self.filename = filename
         self.autosave_period = autosave_period
         self.stateful_objects = OrderedDict()
+        self._load_filename = load
 
     def register(self, obj, name=None):
         if name is None:
@@ -40,7 +41,7 @@ class StateManager(TaskObject):
 
     def load(self):
         try:
-            data = pyon.load_file(self.filename)
+            data = pyon.load_file(self._load_filename or self.filename)
         except FileNotFoundError:
             logger.info("State database '%s' not found, using defaults",
                         self.filename)
@@ -69,6 +70,7 @@ class StateManager(TaskObject):
                 logger.warning("Failed to save state for object '%s'", k,
                                exc_info=True)
         pyon.store_file(self.filename, data)
+        self._load_filename = None
 
     async def _do(self):
         try:
