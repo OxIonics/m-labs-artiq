@@ -147,3 +147,14 @@ def get_user_config_dir():
     dir = user_config_dir("artiq", "m-labs", major)
     os.makedirs(dir, exist_ok=True)
     return dir
+
+
+def summarise_mod(mod):
+    if mod["action"] == "init":
+        return "init"
+    elif mod["action"] in ["append", "insert", "pop"]:
+        return f"{mod['action']} on {mod['path']}"
+    elif mod["action"] in ["setitem", "delitem"]:
+        return f"{mod['action']} '{mod['key']}' in {mod['path']}"
+    else:
+        return f"Unknown action ({mod['action']}"

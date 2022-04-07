@@ -16,7 +16,7 @@ from sipyco import pyon
 
 from artiq.gui.entries import procdesc_to_entry, ScanEntry
 from artiq.gui.tools import LayoutWidget, log_level_to_name, get_open_file_name
-
+from artiq.tools import summarise_mod
 
 logger = logging.getLogger(__name__)
 
@@ -642,14 +642,7 @@ class ExperimentManager:
         self.explist = model.backing_store
 
     def _explist_update(self, mod):
-        if mod["action"] == "init":
-            logger.info("Explist init")
-        elif mod["action"] in ["append", "insert", "pop"]:
-            logger.info(f"Explist {mod['action']} on {mod['path']}")
-        elif mod["action"] in ["setitem", "delitem"]:
-            logger.info(f"Explist {mod['action']} '{mod['key']}' in {mod['path']}")
-        else:
-            logger.info(f"Explist unknown action ({mod['action']}")
+        logger.info(f"Explist {summarise_mod(mod)}")
 
         # This is pretty indiscriminate. In theory, we should be able to target
         # the load of only the experiments that have just been added to
@@ -665,14 +658,7 @@ class ExperimentManager:
         # This is necessary so that any files (i.e. outside repo experiments)
         # can an opportunity to load after the worker manager.
 
-        if mod["action"] == "init":
-            logger.info("Wkr-mgr init")
-        elif mod["action"] in ["append", "insert", "pop"]:
-            logger.info(f"Wkr-mgr {mod['action']} on {mod['path']}")
-        elif mod["action"] in ["setitem", "delitem"]:
-            logger.info(f"Wkr-mgr {mod['action']} '{mod['key']}' in {mod['path']}")
-        else:
-            logger.info(f"Wkr-mgr unknown action ({mod['action']}")
+        logger.info(f"Wkr-mgr {summarise_mod(mod)}")
 
         # This is pretty indiscriminate. See explist_update
         if mod["action"] in ["init", "setitem"]:
