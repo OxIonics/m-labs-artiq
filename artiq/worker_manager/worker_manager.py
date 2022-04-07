@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+import getpass
 import logging
 import os
 import socket
+import sys
 from typing import AsyncIterator, Awaitable, Dict, Callable, Iterator, List, Optional
 import uuid
 
@@ -159,6 +161,7 @@ class WorkerManager:
             transport_factory=PipeWorkerTransport,
             exit_on_idle=False,
             repo_root=None,
+            parent=None,
     ):
         if worker_manager_id is None:
             worker_manager_id = str(uuid.uuid4())
@@ -178,6 +181,7 @@ class WorkerManager:
         self._repo_root = repo_root
         self._log_forwarder: Optional[ForwardHandler] = None
         self.stop_request = asyncio.Event()
+        self.parent = parent
 
     @property
     def id(self):
@@ -188,11 +192,27 @@ class WorkerManager:
         await self._writer.drain()
 
     async def send_hello(self):
+        try:
+            username = getpass.getuser()
+        except Exception:
+            log.warning("Couldn't determine local username", exc_info=True)
+            username = "<unknown>"
+
+        exe = sys.modules["__main__"].__file__
+
         await self._send({
             "action": "hello",
             "manager_id": self._id,
             "manager_description": self._description,
             "repo_root": self._repo_root,
+            "metadata": {
+                "pid": os.getpid(),
+                "hostname": socket.getfqdn(),
+                "username": username,
+                "exe": exe,
+                "file": __file__,
+                "parent": self.parent,
+            },
         })
 
     def start(self):

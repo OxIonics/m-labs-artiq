@@ -55,9 +55,13 @@ class WorkerManagerDB:
         self.notifier[manager_id] = {
             "id": manager_id,
             "description": mgr.description,
+            "repo_root": mgr.repo_root,
+            "metadata": mgr.metadata,
         }
         log.info(
-            f"New worker manager connection id={manager_id} description={mgr.description}"
+            f"New worker manager connection id={manager_id} "
+            f"description={mgr.description} repo_root={mgr.repo_root} "
+            f"metadata={mgr.metadata}"
         )
 
     def get_ports(self):
@@ -146,6 +150,7 @@ class WorkerManagerProxy:
         self._workers: Dict[str, _ManagedWorkerState] = {}
         self._inprogress_scans: Dict[str, asyncio.Future] = {}
         self._on_close: List[Callable[[], None]] = [detach]
+        self.metadata = hello.get("metadata", {})
 
     @property
     def id(self):

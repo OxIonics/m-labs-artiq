@@ -48,6 +48,11 @@ def main():
              "Can be useful for debugging."
     )
     parser.add_argument(
+        "--parent",
+        help="Report a parent in the worker manager metadata. "
+             "Purely informational"
+    )
+    parser.add_argument(
         "description",
         help="The human readable description for the worker manager"
     )
@@ -79,6 +84,7 @@ def main():
             args.description,
             exit_on_idle=args.exit_on_idle,
             transport_factory=transport_factory,
+            parent=args.parent,
         )
     )
     try:

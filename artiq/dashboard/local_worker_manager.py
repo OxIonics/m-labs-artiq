@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import os
 import socket
 import sys
 import uuid
@@ -32,6 +33,7 @@ class LocalWorkerManager:
         cmd = [
             sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
             "--id", self._id,
+            "--parent", f"artiq_dashboard:{os.getpid()}",
             socket.gethostname(), self._server,
         ]
         if self._verbose:

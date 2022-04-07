@@ -161,8 +161,12 @@ def get_argparser():
     parser_show.set_defaults(func=_action_show)
     parser_show.add_argument(
         "what", metavar="WHAT",
-        choices=["schedule", "log", "ccb", "devices", "datasets", "explist"],
-        help="select object to show: %(choices)s")
+        choices=[
+            "schedule", "log", "ccb", "devices", "datasets", "explist",
+            "worker-mgrs",
+        ],
+        help="select object to show: %(choices)s",
+    )
 
     parser_scan_devices = subparsers.add_parser(
         "scan-devices", help="trigger a device database (re)scan")
@@ -409,6 +413,8 @@ def _action_show(args):
         _show_dict(args, "datasets", _show_datasets)
     elif args.what == "explist":
         _show_dict(args, "all_explist", _show_exp_list)
+    elif args.what == "worker-mgrs":
+        _show_dict(args, "worker_managers", _show_worker_managers)
     else:
         raise ValueError(f"Unknown show option: {args.what}")
 
@@ -465,6 +471,21 @@ def _show_exp_list(explist):
     for mgr_id, exps in explist.items():
         for exp in exps:
             table.add_row([mgr_id, exp])
+    print(table)
+
+
+def _show_worker_managers(mgrs):
+    clear_screen()
+    table = PrettyTable([
+        "ManagerID", "Description", "Repo root", "PID", "Host", "User", "Exe",
+        "Parent",
+    ])
+    for mgr in mgrs.values():
+        meta = mgr.get("metadata", {})
+        table.add_row([
+            mgr["id"], mgr["description"], mgr["repo_root"], meta["pid"],
+            meta["hostname"], meta["username"], meta["exe"], meta["parent"],
+        ])
     print(table)
 
 
