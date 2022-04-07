@@ -674,7 +674,7 @@ class ExperimentManager:
         self.schedule = model.backing_store
 
     def set_worker_manager_model(self, model):
-        self.worker_managers = model.backing_store
+        self.worker_managers = model
 
     def resolve_expurl(self, expurl):
         parsed = urllib.parse.urlparse(expurl)
@@ -685,7 +685,7 @@ class ExperimentManager:
             urlpath = urlpath[1:]
         # Check worker_managers not explist because this might be a file
         # experiment from a non-scanned worker manager
-        if worker_manager_id not in self.worker_managers:
+        if worker_manager_id is not None and worker_manager_id not in self.worker_managers:
             raise UnknownWorkerManagerError(
                 f"Experiment references unknown worker manager ({worker_manager_id})"
             )

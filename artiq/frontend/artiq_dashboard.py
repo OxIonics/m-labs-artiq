@@ -172,7 +172,7 @@ def main():
                                   ("all_explist_status", explorer.AllStatusUpdater),
                                   ("datasets", datasets.Model),
                                   ("schedule", schedule.Model),
-                                  ("worker_managers", explorer.WorkerManagerModel)):
+                                  ("worker_managers", dict)):
         subscriber = ModelSubscriber(notifier_name, modelf,
             report_disconnect)
         loop.run_until_complete(subscriber.connect(

@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import QFileDialog
 
 from artiq.dashboard.experiments import make_url
 from artiq.gui.tools import LayoutWidget
-from artiq.gui.models import DictSyncModel, DictSyncTreeSepModel
+from artiq.gui.models import DictSyncModel, DictSyncTreeSepModel, ReplicantModelManager
 from artiq.gui.waitingspinnerwidget import QtWaitingSpinner
 
 
@@ -319,7 +319,11 @@ class ExplorerDock(QtWidgets.QDockWidget):
 
         top_widget.addWidget(QtWidgets.QLabel("Repo:"), 0, 0)
         self.repo_select = QtWidgets.QComboBox(self)
-        worker_manager_sub.add_setmodel_callback(self.set_repo_model)
+        ReplicantModelManager.with_setmodel_callback(
+            worker_manager_sub,
+            WorkerManagerModel,
+            self.set_repo_model,
+        )
         self.repo_select.currentIndexChanged.connect(self._repo_selected_changed)
         top_widget.addWidget(self.repo_select, 0, 1)
 
