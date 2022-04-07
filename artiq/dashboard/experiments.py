@@ -295,7 +295,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
     def try_load(self):
         try:
             self.manager.resolve_expurl(self.expurl)
-        except UnknownWorkerManagerError as ex:
+        except (UnknownWorkerManagerError, MissingExperimentError) as ex:
             logger.debug(f"Failed to load experiment: {ex}")
             self.show_missing(str(ex))
         else:
@@ -600,6 +600,10 @@ class UnknownWorkerManagerError(Exception):
     pass
 
 
+class MissingExperimentError(Exception):
+    pass
+
+
 class ExperimentManager:
     #: Registry for custom argument editor classes, indexed by the experiment
     #: argument_ui key string.
@@ -693,7 +697,12 @@ class ExperimentManager:
                     f"Repo experiment references worker manager "
                     f"({worker_manager_id}) which has not been scanned"
                 ) from ex
-            expinfo = explist[urlpath]
+            try:
+                expinfo = explist[urlpath]
+            except KeyError as ex:
+                raise MissingExperimentError(
+                    f"Experiment {urlpath} can't be found in repository"
+                )
             return ExpUrlResolution(
                 True,
                 worker_manager_id,
