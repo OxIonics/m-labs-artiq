@@ -296,6 +296,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
         try:
             self.manager.resolve_expurl(self.expurl)
         except UnknownWorkerManagerError as ex:
+            logger.debug(f"Failed to load experiment: {ex}")
             self.show_missing(str(ex))
         else:
             self.show_experiment()
@@ -630,6 +631,7 @@ class ExperimentManager:
         schedule_sub.add_setmodel_callback(self.set_schedule_model)
         self.worker_managers = {}
         worker_manager_sub.add_setmodel_callback(self.set_worker_manager_model)
+        worker_manager_sub.notify_cbs.append(self._worker_manager_update)
 
         self.open_experiments = dict()
 
@@ -647,13 +649,32 @@ class ExperimentManager:
         elif mod["action"] in ["setitem", "delitem"]:
             logger.info(f"Explist {mod['action']} '{mod['key']}' in {mod['path']}")
         else:
-            logger.info(f"Unknown action ({mod['action']}")
+            logger.info(f"Explist unknown action ({mod['action']}")
 
         # This is pretty indiscriminate. In theory, we should be able to target
         # the load of only the experiments that have just been added to
         # explist. But that opens up an edge case around worker managers
         # appearing, but with a different set of experiments. And it seems like
         # an unnecessary optimisation at the moment.
+        if mod["action"] in ["init", "setitem"]:
+            for exp in self.open_experiments.values():
+                if not exp.loaded:
+                    exp.try_load()
+
+    def _worker_manager_update(self, mod):
+        # This is necessary so that any files (i.e. outside repo experiments)
+        # can an opportunity to load after the worker manager.
+
+        if mod["action"] == "init":
+            logger.info("Wkr-mgr init")
+        elif mod["action"] in ["append", "insert", "pop"]:
+            logger.info(f"Wkr-mgr {mod['action']} on {mod['path']}")
+        elif mod["action"] in ["setitem", "delitem"]:
+            logger.info(f"Wkr-mgr {mod['action']} '{mod['key']}' in {mod['path']}")
+        else:
+            logger.info(f"Wkr-mgr unknown action ({mod['action']}")
+
+        # This is pretty indiscriminate. See explist_update
         if mod["action"] in ["init", "setitem"]:
             for exp in self.open_experiments.values():
                 if not exp.loaded:
@@ -672,13 +693,20 @@ class ExperimentManager:
         if parsed.hostname:
             worker_manager_id = parsed.hostname
             urlpath = urlpath[1:]
-        try:
-            explist = self.explist[worker_manager_id]
-        except KeyError as ex:
+        # Check worker_managers not explist because this might be a file
+        # experiment from a non-scanned worker manager
+        if worker_manager_id not in self.worker_managers:
             raise UnknownWorkerManagerError(
-                "Experiment references unknown worker manager"
-            ) from ex
+                f"Experiment references unknown worker manager ({worker_manager_id})"
+            )
         if parsed.scheme == "repo":
+            try:
+                explist = self.explist[worker_manager_id]
+            except KeyError as ex:
+                raise UnknownWorkerManagerError(
+                    f"Repo experiment references worker manager "
+                    f"({worker_manager_id}) which has not been scanned"
+                ) from ex
             expinfo = explist[urlpath]
             return ExpUrlResolution(
                 True,
