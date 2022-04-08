@@ -660,7 +660,7 @@ class ExperimentManager:
 
     def _worker_manager_update(self, mod):
         # This is necessary so that any files (i.e. outside repo experiments)
-        # can an opportunity to load after the worker manager.
+        # can have an opportunity to load after the worker manager.
 
         logger.info(f"Wkr-mgr {summarise_mod(mod)}")
 
