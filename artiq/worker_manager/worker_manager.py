@@ -375,7 +375,7 @@ class WorkerManager:
         await self._send({
             "action": forward_action,
             "worker_id": worker_id,
-            "data": "",
+            "data": None,
         })
 
     async def _create_worker(self, obj):
