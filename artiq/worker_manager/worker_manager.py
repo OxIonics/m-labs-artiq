@@ -321,6 +321,10 @@ class WorkerManager:
                     "scan_id": scan_id,
                     "msg": str(ex)
                 })
+        elif action == "error":
+            # The master will close the connection in a moment. This is purely
+            # informational
+            log.error(obj["msg"])
         else:
             raise RuntimeError(f"Unknown action {action}")
 
