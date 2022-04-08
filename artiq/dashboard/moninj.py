@@ -4,7 +4,7 @@ from collections import namedtuple
 
 from PyQt5 import QtCore, QtWidgets, QtGui
 
-from sipyco.sync_struct import Subscriber
+from sipyco.sync_struct import Notifier, Subscriber
 
 from artiq.coredevice.comm_moninj import *
 from artiq.gui.tools import LayoutWidget
@@ -242,7 +242,8 @@ def setup_from_ddb(ddb):
 
 
 class _DeviceManager:
-    def __init__(self):
+    def __init__(self, notifier):
+        self.notifier = notifier
         self.core_addr = None
         self.reconnect_core = asyncio.Event()
         self.core_connection = None
@@ -392,6 +393,7 @@ class _DeviceManager:
         while True:
             await self.reconnect_core.wait()
             self.reconnect_core.clear()
+            self.notifier["connected"] = False
             if self.core_connection is not None:
                 await self.core_connection.close()
                 self.core_connection = None
@@ -414,6 +416,7 @@ class _DeviceManager:
                     self.setup_dds_monitoring(True, bus_channel, channel)
                 for spi_channel, channel in self.dac_widgets.keys():
                     self.setup_dac_monitoring(True, spi_channel, channel)
+                self.notifier["connected"] = True
 
     async def close(self):
         self.core_connector_task.cancel()
@@ -453,7 +456,8 @@ class MonInj:
         self.dds_dock = _MonInjDock("DDS")
         self.dac_dock = _MonInjDock("DAC")
 
-        self.dm = _DeviceManager()
+        self.notifier = Notifier({"connected": False})
+        self.dm = _DeviceManager(self.notifier)
         self.dm.ttl_cb = lambda: self.ttl_dock.layout_widgets(
                             self.dm.ttl_widgets.values())
         self.dm.dds_cb = lambda: self.dds_dock.layout_widgets(

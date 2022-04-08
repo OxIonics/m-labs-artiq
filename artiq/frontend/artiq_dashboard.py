@@ -28,7 +28,7 @@ from artiq.gui.models import ModelSubscriber
 from artiq.gui import state, log
 from artiq.dashboard import (
     experiments, shortcuts, explorer,
-    moninj, datasets, schedule, applets_ccb, worker_managers,
+    moninj, datasets, schedule, applets_ccb, status, worker_managers,
 )
 
 
@@ -162,12 +162,15 @@ def main():
         config.close_rpc()
 
     disconnect_reported = False
+    d_status = None
     def report_disconnect():
         nonlocal disconnect_reported
         if not disconnect_reported:
             logging.error("connection to master lost, "
                           "restart dashboard to reconnect", exc_info=True)
         disconnect_reported = True
+        if d_status:
+            d_status.master_disconnected()
 
     sub_clients = dict()
     for notifier_name, modelf in (("all_explist", explorer.AllExpListModel),
@@ -252,6 +255,12 @@ def main():
     smgr.register(logmgr)
     broadcast_clients["log"].notify_cbs.append(logmgr.append_message)
     widget_log_handler.callback = logmgr.append_message
+
+    d_status = status.ConnectionStatuses(
+        main_window,
+        d_ttl_dds.notifier,
+        local_worker_manager,
+    )
 
     # lay out docks
     right_docks = [
