@@ -1,3 +1,7 @@
+import pprint
+import socket
+from textwrap import dedent
+
 from PyQt5 import QtCore, QtGui, QtWidgets, Qt
 from sipyco.sync_struct import Notifier
 
@@ -27,7 +31,7 @@ class Status(QtWidgets.QFrame):
         self.light = StatusLight()
         self.text = QtWidgets.QLabel("not set")
 
-        layout = QtWidgets.QHBoxLayout(self)
+        self.layout = layout = QtWidgets.QHBoxLayout(self)
         layout.addWidget(QtWidgets.QLabel(title))
         layout.addWidget(self.light)
         layout.addWidget(self.text)
@@ -47,9 +51,18 @@ class ConnectionStatuses:
             local_worker_manager: LocalWorkerManager,
             ):
 
+        self.main_window = main_window
         self.master_conn = Status("Master conn")
         self.moninj = Status("moninj (kasli)")
         self.local_worker_manager_status = Status("Local worker manager")
+        self.local_worker_manager_button = QtWidgets.QPushButton()
+        self.local_worker_manager_status.layout.addWidget(
+            self.local_worker_manager_button
+        )
+        self.local_worker_manager_button.hide()
+        self.local_worker_manager_button.clicked.connect(
+            self._fix_local_worker_manager
+        )
 
         statusBar = main_window.statusBar()
         statusBar.addWidget(self.master_conn)
@@ -76,18 +89,76 @@ class ConnectionStatuses:
             self.local_worker_manager_status.set_status(
                 "Not started", Qt.QColorConstants.LightGray,
             )
+            self.local_worker_manager_button.hide()
         elif status == LocalWorkerManagerStatus.running:
             self.local_worker_manager_status.set_status(
                 "Running", Qt.QColorConstants.Green,
             )
+            self.local_worker_manager_button.hide()
         elif status == LocalWorkerManagerStatus.failed:
             self.local_worker_manager_status.set_status(
                 "Failed", Qt.QColorConstants.Red,
             )
+            self.local_worker_manager_button.setText("Restart")
+            self.local_worker_manager_button.show()
         elif status == LocalWorkerManagerStatus.conflict:
             self.local_worker_manager_status.set_status(
                 "Conflict", Qt.QColorConstants.Red,
             )
+            self.local_worker_manager_button.setText("Fix")
+            self.local_worker_manager_button.show()
 
+    def _fix_local_worker_manager(self):
+        if self.local_worker_manager.status == LocalWorkerManagerStatus.failed:
+            self.local_worker_manager.restart()
+        elif self.local_worker_manager.status == LocalWorkerManagerStatus.conflict:
+            conflict = self.local_worker_manager.get_conflict_info()
 
+            msg = (
+                "Another worker manager with same ID is already connected to"
+                "the artiq master.Worker manager IDs should be unique to the"
+                "combination of (machine, working directory, artiq master)."
+                "\n\n"
+                "You could be seeing this error because:\n"
+                "* You're running two dashboards from the same directory\n"
+                "* You've copied or renamed your artiq dashboard configuration\n"
+                "* A dashboard failed and exited without closing the associated "
+                "worker manager.\n"
+                "\n"
+                "To start a worker manager with this dashboard you'll have to "
+                "stop the other worker manager."
+                "\n\n"
+            )
 
+            try:
+                if conflict["metadata"]["hostname"] != socket.getfqdn():
+                    msg = dedent("""\
+                        The conflicting worker manager appears to be 
+                        different computer.
+                        
+                        Your computer: {socket.getfqdn()}
+                        Conflicting computer: {conflict["metadata"]["hostname"]}
+                        Conflicting username: {conflict["metadata"]["username"]}
+                    """)
+                else:
+                    msg += (
+                        f"The conflicting process ID: {conflict['metadata']['pid']}\n"
+                    )
+                    if conflict["metadata"].get("parent"):
+                        msg += (
+                            f"Started By: {conflict['metadata']['parent']}\n"
+                        )
+                    msg += (
+                        f"In: {conflict['repo_root']}\n"
+                    )
+
+            except KeyError:
+                msg += (
+                    "The other worker manager didn't report sensible information."
+                    "Sorry you're on your own."
+                )
+
+            msgBox = QtWidgets.QMessageBox(self.main_window)
+            msgBox.setText(msg)
+            msgBox.setDetailedText(pprint.pformat(conflict))
+            msgBox.exec()

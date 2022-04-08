@@ -143,9 +143,6 @@ def main():
     atexit.register(loop.close)
     smgr = state.StateManager(db_file, load=load_db_file)
 
-    local_worker_manager = LocalWorkerManager(args.server, args.verbose)
-    smgr.register(local_worker_manager)
-
     # create connections to master
     rpc_clients = dict()
     for target in "schedule", "experiment_db", "dataset_db", "device_db":
@@ -184,6 +181,13 @@ def main():
             args.server, args.port_notify))
         atexit_register_coroutine(subscriber.close)
         sub_clients[notifier_name] = subscriber
+
+    local_worker_manager = LocalWorkerManager(
+        args.server,
+        args.verbose,
+        sub_clients["worker_managers"],
+    )
+    smgr.register(local_worker_manager)
 
     broadcast_clients = dict()
     for target in "log", "ccb":
