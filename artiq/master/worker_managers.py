@@ -5,6 +5,7 @@ import logging
 from typing import AsyncIterator, Callable, Dict, List, Tuple
 import uuid
 
+from artiq.tools import shutdown_and_drain
 from sipyco import pyon
 from sipyco.logging_tools import log_with_name
 from sipyco.sync_struct import Notifier
@@ -97,7 +98,9 @@ class WorkerManagerDB:
                 "action": "error",
                 "msg": str(ex),
             }).encode())
+            await shutdown_and_drain(reader, writer)
             writer.close()
+            await writer.wait_closed()
         else:
             self._create_worker_manager(manager_id, hello, reader, writer)
 
@@ -182,10 +185,12 @@ class WorkerManagerProxy:
         )
 
     async def _run(self):
+        initiate_close = False
         try:
             while True:
                 line = await self._reader.readline()
                 if not line:
+                    log.info("Worker manager disconnected")
                     break
                 obj = pyon.decode(line.decode())
                 action = obj["action"]
@@ -206,18 +211,22 @@ class WorkerManagerProxy:
                 else:
                     raise RuntimeError(f"Unexpected action {action}")
         except asyncio.CancelledError:
-            pass
+            log.info("Worker manager proxy stopping")
+            initiate_close = True
+        except ConnectionError as ex:
+            log.exception(f"Connection error: {ex}")
         except Exception:
             # This is signalled to the worker manager by closing
             # the connection and to all ManagedWorkerTransports in `_close`
             log.exception(
                 "Unhandled exception in handling message from worker manager",
             )
+            initiate_close = True
         finally:
             log.info(f"Shutting down worker manager {self._id}")
-            await self._close()
+            await self._close(initiate_close)
 
-    async def _close(self):
+    async def _close(self, initiate_close):
         self._closed = True
         for cb in self._on_close:
             cb()
@@ -245,6 +254,8 @@ class WorkerManagerProxy:
                 log.warning(
                     f"Failed to put end sentinels in {len(pending)} worker queues"
                 )
+        if initiate_close:
+            await shutdown_and_drain(self._reader, self._writer)
         self._writer.close()
         await self._writer.wait_closed()
 

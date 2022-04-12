@@ -120,7 +120,7 @@ async def test_worker_manager_connection(worker_manager_db, worker_manager_port)
         worker_manager = await wait_for(WorkerManager.create(
             BIND, worker_manager_port, manager_id, description,
         ))
-        exit.push_async_callback(worker_manager.stop)
+        exit.push_async_callback(lambda: wait_for(worker_manager.stop))
 
         await wait_for(lambda: assert_num_connection(worker_manager_db))
 
@@ -255,3 +255,23 @@ async def test_late_worker_create_and_then_close(worker_manager_db, worker_manag
     # Defer assertions about exception raised by create until after the more
     # import implicit assertion that transport.close is successful
     assert isinstance(exc_info.value, RuntimeError)
+
+
+async def test_duplicate_worker_manager_connection_rejected(worker_manager_db, worker_manager_port):
+    manager_id = str(uuid.uuid4())
+    description = "Test workers"
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport
+    ):
+        await wait_for(lambda: assert_num_connection(worker_manager_db))
+
+        async with WorkerManager.context(
+                BIND, worker_manager_port, manager_id, description,
+                transport_factory=FakeWorkerTransport
+        ) as worker_manager2:
+
+            await wait_for(worker_manager2.wait_for_exit())
+            # Assert wait for exit returns promptly with no
+            # exception

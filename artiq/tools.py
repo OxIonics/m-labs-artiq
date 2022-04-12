@@ -1,4 +1,5 @@
 import asyncio
+from asyncio import StreamReader, StreamWriter
 import importlib.util
 import importlib.machinery
 import inspect
@@ -20,7 +21,8 @@ from artiq.language.environment import is_public_experiment
 __all__ = ["parse_arguments", "elide", "short_format", "file_import",
            "get_experiment",
            "exc_to_warning", "asyncio_wait_or_cancel",
-           "get_windows_drives", "get_user_config_dir"]
+           "get_windows_drives", "get_user_config_dir",
+           "shutdown_and_drain"]
 
 
 logger = logging.getLogger(__name__)
@@ -158,3 +160,12 @@ def summarise_mod(mod):
         return f"{mod['action']} '{mod['key']}' in {mod['path']}"
     else:
         return f"Unknown action ({mod['action']}"
+
+
+async def shutdown_and_drain(reader: StreamReader, writer: StreamWriter):
+    writer.write_eof()
+    while True:
+        msg = await reader.readline()
+        if not msg:
+            break
+        logger.error(f"Unhandled message: {msg!r}")

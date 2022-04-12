@@ -15,7 +15,7 @@ from sipyco.logging_tools import LogParser
 
 from artiq.consts import WORKER_MANAGER_PORT
 from artiq.master.worker_transport import PipeWorkerTransport, WorkerTransport
-from artiq.tools import get_windows_drives
+from artiq.tools import get_windows_drives, shutdown_and_drain
 from artiq.worker_manager.logging import ForwardHandler
 
 log = logging.getLogger(__name__)
@@ -234,6 +234,7 @@ class WorkerManager:
 
     async def process_master_msgs(self):
         tasks = BackgroundTasks()
+        initiate_close = False
         try:
             while True:
                 line = await tasks.run_foreground(self._reader.readline())
@@ -242,9 +243,17 @@ class WorkerManager:
                     break
                 tasks.add_background(self._handle_msg(line))
         except asyncio.CancelledError:
-            pass
+            log.info(f"Worker manager stopping")
+            initiate_close = True
+        except ConnectionError as ex:
+            log.info(f"Worker manager closing connection error: {ex}")
+            raise
+        except Exception as ex:
+            log.info(f"Worker manager closing internal error: {ex}")
+            initiate_close = True
+            raise
         finally:
-            await self._clean_up()
+            await self._clean_up(initiate_close)
             tasks = [
                 task
                 for task in tasks.take_tasks()
@@ -412,7 +421,7 @@ class WorkerManager:
         if worker.stderr_task in pending:
             log.warning("Stderr task didn't exit")
 
-    async def _clean_up(self):
+    async def _clean_up(self, initiate_close):
         log.info("Closing worker manager")
         if self._log_forwarder:
             await self._log_forwarder.stop()
@@ -426,6 +435,8 @@ class WorkerManager:
             ])
 
         try:
+            if initiate_close:
+                await shutdown_and_drain(self._reader, self._writer)
             self._writer.close()
             await self._writer.wait_closed()
         except ConnectionError:
