@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime
 import logging
-from typing import AsyncIterator, Callable, Dict, List, Tuple
+from typing import AsyncIterator, Callable, Dict, List, Optional, Tuple
 import uuid
 
 from artiq.tools import shutdown_and_drain
@@ -41,9 +42,14 @@ class WorkerManagerDB:
         # Modifications to self._worker_managers must also modify this notifier.
         self.notifier: Notifier = Notifier({})
 
+    # TODO: remove old worker managers
     def _remove_worker_manager(self, manager_id):
         self._worker_managers.pop(manager_id, None)
         self.notifier.pop(manager_id)
+
+    def _update_connection_state(self, manager_id):
+        mgr = self._worker_managers[manager_id]
+        self.notifier[manager_id] = mgr.get_info()
 
     def _create_worker_manager(self, manager_id, hello, reader, writer):
         mgr = self._worker_managers[manager_id] = WorkerManagerProxy(
@@ -51,14 +57,9 @@ class WorkerManagerDB:
             hello,
             reader,
             writer,
-            lambda: self._remove_worker_manager(manager_id),
         )
-        self.notifier[manager_id] = {
-            "id": manager_id,
-            "description": mgr.description,
-            "repo_root": mgr.repo_root,
-            "metadata": mgr.metadata,
-        }
+        mgr.add_on_close(lambda: self._update_connection_state(manager_id))
+        self.notifier[manager_id] = mgr.get_info()
         log.info(
             f"New worker manager connection id={manager_id} "
             f"description={mgr.description} repo_root={mgr.repo_root} "
@@ -85,7 +86,7 @@ class WorkerManagerDB:
 
             manager_id = hello["manager_id"]
             existing_proxy = self._worker_managers.get(manager_id)
-            if existing_proxy:
+            if existing_proxy and existing_proxy.connected:
                 raise RuntimeError(
                     "Worker manager connection attempt with ID that's already "
                     f"connected. ID {manager_id}. "
@@ -102,7 +103,11 @@ class WorkerManagerDB:
             writer.close()
             await writer.wait_closed()
         else:
-            self._create_worker_manager(manager_id, hello, reader, writer)
+            if existing_proxy:
+                existing_proxy.reconnect(hello, reader, writer)
+                self._update_connection_state(manager_id)
+            else:
+                self._create_worker_manager(manager_id, hello, reader, writer)
 
     def get_proxy(self, worker_manager_id) -> WorkerManagerProxy:
         try:
@@ -159,22 +164,39 @@ class WorkerManagerProxy:
         "scan_failed",
     }
 
-    def __init__(self, id_, hello, reader, writer, detach):
+    def __init__(self, id_, hello, reader, writer):
         self._id = id_
-        self.description = hello["manager_description"]
-        self.repo_root = hello["repo_root"]
-        self._reader: asyncio.StreamReader = reader
-        self._writer: asyncio.StreamWriter = writer
-        self._run_task = asyncio.create_task(self._run())
+        self.description: str
+        self.repo_root: str
+        self.metadata: Dict
+        self._reader: Optional[asyncio.StreamReader] = None
+        self._writer: Optional[asyncio.StreamWriter] = None
+        self._run_task: Optional[asyncio.Task] = None
         self._workers: Dict[str, _ManagedWorkerState] = {}
         self._inprogress_scans: Dict[str, asyncio.Future] = {}
-        self._on_close: List[Callable[[], None]] = [detach]
-        self._closed = False
-        self.metadata = hello.get("metadata", {})
+        self._on_close: List[Callable[[], None]] = []
+        self.connection_time: datetime
+        self.disconnection_time: Optional[datetime] = None
+        self.reconnect(hello, reader, writer)
 
     @property
     def id(self):
         return self._id
+
+    @property
+    def connected(self):
+        return self._run_task is not None
+
+    def reconnect(self, hello, reader, writer):
+        if self.connected:
+            raise RuntimeError("reconnecting already connected worker manager proxy")
+        self.connection_time = datetime.now()
+        self.description = hello["manager_description"]
+        self.repo_root = hello["repo_root"]
+        self.metadata = hello.get("metadata", {})
+        self._reader = reader
+        self._writer = writer
+        self._run_task = asyncio.create_task(self._run())
 
     def get_transport(self):
         id_ = str(uuid.uuid4())
@@ -227,7 +249,8 @@ class WorkerManagerProxy:
             await self._close(initiate_close)
 
     async def _close(self, initiate_close):
-        self._closed = True
+        self.disconnection_time = datetime.now()
+        self._run_task = None
         for cb in self._on_close:
             cb()
         workers = list(self._workers.values())
@@ -243,6 +266,7 @@ class WorkerManagerProxy:
             scan_future.set_exception(RuntimeError(
                 "Worker proxy closed during scan",
             ))
+        self._inprogress_scans.clear()
         if workers:
             (_, pending) = await asyncio.wait(
                 [worker.recv_queue.put("") for worker in workers] +
@@ -258,6 +282,8 @@ class WorkerManagerProxy:
             await shutdown_and_drain(self._reader, self._writer)
         self._writer.close()
         await self._writer.wait_closed()
+        self._reader = None
+        self._writer = None
 
     def _worker_action(self, obj):
         action = obj["action"]
@@ -305,7 +331,7 @@ class WorkerManagerProxy:
     async def create_worker(
             self, worker_id, rid, log_level
     ) -> Tuple[AsyncIterator, AsyncIterator]:
-        if self._closed:
+        if not self.connected:
             # It's possible if we're busy that:
             # * receive scheduler.submit, which creates a ManagedWorkerTransport
             #   for experiment RID=X
@@ -368,6 +394,7 @@ class WorkerManagerProxy:
         await self._workers[worker_id].closed
 
     async def scan_dir(self, path):
+        # TODO should reject if closed
         scan_id = str(uuid.uuid4())
         future = asyncio.get_event_loop().create_future()
         self._inprogress_scans[scan_id] = future
@@ -398,6 +425,17 @@ class WorkerManagerProxy:
 
     def add_on_close(self, cb):
         self._on_close.append(cb)
+
+    def get_info(self):
+        return {
+            "id": self.id,
+            "description": self.description,
+            "repo_root": self.repo_root,
+            "metadata": self.metadata,
+            "connected": self.connected,
+            "connection_time": self.connection_time,
+            "disconnection_time": self.disconnection_time,
+        }
 
 
 class ManagedWorkerTransport(WorkerTransport):
