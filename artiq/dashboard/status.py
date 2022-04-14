@@ -152,10 +152,10 @@ class ConnectionStatuses:
                         f"In: {conflict['repo_root']}\n"
                     )
 
-            except KeyError:
+            except KeyError as ex:
                 msg += (
                     "The other worker manager didn't report sensible information."
-                    "Sorry you're on your own."
+                    f"Sorry you're on your own. (Missing key: {ex})"
                 )
 
             msgBox = QtWidgets.QMessageBox(self.main_window)
