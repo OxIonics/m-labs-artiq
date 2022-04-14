@@ -116,7 +116,7 @@ class ConnectionStatuses:
 
             msg = (
                 "Another worker manager with same ID is already connected to"
-                "the artiq master.Worker manager IDs should be unique to the"
+                "the artiq master. Worker manager IDs should be unique to the"
                 "combination of (machine, working directory, artiq master)."
                 "\n\n"
                 "You could be seeing this error because:\n"
