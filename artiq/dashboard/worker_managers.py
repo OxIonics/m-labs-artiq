@@ -3,6 +3,7 @@ import logging
 from PyQt5 import QtCore, QtWidgets
 
 from artiq.dashboard.local_worker_manager import LocalWorkerManager
+from artiq.display_tools import make_connection_string
 from artiq.gui.models import (
     DictSyncSimpleTableModel,
     ModelSubscriber,
@@ -47,10 +48,7 @@ class _Model(DictSyncSimpleTableModel):
             status.append("Local")
 
         try:
-            if v["connected"]:
-                status.append(f"Connected since: {v['connection_time']}")
-            else:
-                status.append(f"Disconnected since: {v['disconnection_time']}")
+            status.append(make_connection_string(v))
         except KeyError:
             log.warning(
                 f"Failed to generate status info for worker manager {v['id']}",

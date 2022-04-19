@@ -6,8 +6,7 @@ import logging
 from PyQt5 import QtCore, QtWidgets, QtGui
 
 from artiq.gui.models import DictSyncModel
-from artiq.schedule_display import make_exp_source
-from artiq.tools import elide
+from artiq.display_tools import make_exp_source
 
 
 logger = logging.getLogger(__name__)

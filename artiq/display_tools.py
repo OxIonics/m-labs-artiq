@@ -23,3 +23,10 @@ def make_exp_source(expid, repo_msg, worker_managers=None):
         if repo_msg:
             source_lines.append(elide(repo_msg, 40))
     return "\n".join(source_lines)
+
+
+def make_connection_string(worker_manager):
+    if worker_manager["connected"]:
+        return f"Connected since: {worker_manager['connection_time']}"
+    else:
+        return f"Disconnected since: {worker_manager['disconnection_time']}"
