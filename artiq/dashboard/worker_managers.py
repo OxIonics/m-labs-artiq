@@ -1,3 +1,5 @@
+import logging
+
 from PyQt5 import QtCore, QtWidgets
 
 from artiq.dashboard.local_worker_manager import LocalWorkerManager
@@ -7,6 +9,8 @@ from artiq.gui.models import (
     ReplicantModelManager,
 )
 
+log = logging.getLogger(__name__)
+
 
 # Most of the gets in the class are just needed for backwards compatibility
 # with an earlier version of worker managers.
@@ -15,7 +19,7 @@ class _Model(DictSyncSimpleTableModel):
         self.local_worker_manager: LocalWorkerManager = local_worker_manager
         super(_Model, self).__init__(
             [self.RowSpec("ID", lambda k, v: v["id"]),
-             self.RowSpec("Local", self._is_local),
+             self.RowSpec("Status", self._show_status),
              self.RowSpec("Description", lambda k, v: v["description"]),
              self.RowSpec("Repo root", lambda k, v: v.get("repo_root")),
              self.RowSpec("PID", lambda k, v: v.get("metadata", {}).get("pid")),
@@ -29,17 +33,32 @@ class _Model(DictSyncSimpleTableModel):
 
     def sort_key(self, k, v):
         return (
+            v["id"] != self.local_worker_manager.id,
+            not v["connected"],
             v["description"],
             v.get("repo_root"),
             v.get("metadata", {}).get("pid"),
             v["id"],
         )
 
-    def _is_local(self, k, v):
+    def _show_status(self, k, v):
+        status = []
         if v["id"] == self.local_worker_manager.id:
-            return "Local"
-        else:
-            return "Remote"
+            status.append("Local")
+
+        try:
+            if v["connected"]:
+                status.append(f"Connected since: {v['connection_time']}")
+            else:
+                status.append(f"Disconnected since: {v['disconnection_time']}")
+        except KeyError:
+            log.warning(
+                f"Failed to generate status info for worker manager {v['id']}",
+                exc_info=True,
+            )
+            status.append("Missing status info")
+
+        return "\n".join(status)
 
 
 class WorkerManagerDock(QtWidgets.QDockWidget):
