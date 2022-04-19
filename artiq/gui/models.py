@@ -170,6 +170,11 @@ class DictSyncModel(QtCore.QAbstractTableModel):
         if k in self.backing_store:
             old_row = self.row_to_key.index(k)
             new_row = self._find_row(k, v)
+            if old_row == new_row - 1 or old_row == new_row + 1:
+                # The sort key has changed but it's the same relative to all
+                # other entries other than the changed entry. Leave it where it
+                # is.
+                new_row = old_row
             if old_row == new_row:
                 self.dataChanged.emit(self.index(old_row, 0),
                                       self.index(old_row, len(self.headers)-1))

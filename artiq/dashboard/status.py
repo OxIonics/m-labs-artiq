@@ -85,7 +85,10 @@ class ConnectionStatuses:
                 self.moninj.set_status("Disconnected", Qt.QColorConstants.Red)
 
     def _local_worker_manager_status_change(self, status):
-        if status == LocalWorkerManagerStatus.not_started:
+        if status in [
+            LocalWorkerManagerStatus.initial,
+            LocalWorkerManagerStatus.starting,
+        ]:
             self.local_worker_manager_status.set_status(
                 "Not started", Qt.QColorConstants.LightGray,
             )

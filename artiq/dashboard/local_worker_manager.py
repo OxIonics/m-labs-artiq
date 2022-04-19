@@ -15,10 +15,11 @@ log = logging.getLogger(__name__)
 
 
 class LocalWorkerManagerStatus(Enum):
-    not_started = 0
-    running = 1
-    failed = 2
-    conflict = 3
+    initial = 0
+    starting = 1
+    running = 2
+    failed = 3
+    conflict = 4
 
 
 class LocalWorkerManager:
@@ -35,7 +36,7 @@ class LocalWorkerManager:
         self._process = None
         self._task = None
         self._do_start = asyncio.Event()
-        self.status = LocalWorkerManagerStatus.not_started
+        self.status = LocalWorkerManagerStatus.initial
         self._on_status_changed = []
         self._worker_managers = None
         worker_managers_sub.add_setmodel_callback(self._set_worker_managers)
@@ -53,42 +54,51 @@ class LocalWorkerManager:
 
     def _set_worker_managers(self, model):
         self._worker_managers = model
-        if self.status == LocalWorkerManagerStatus.not_started and self._task is not None:
-            self._check_start()
-
-    def _check_start(self):
-        if self._id in self._worker_managers:
-            self._status_changed(LocalWorkerManagerStatus.conflict)
-            conflict = self._worker_managers[self._id]
-            log.warning(
-                f"Found conflicting worker manager in initial data. "
-                f"id: {self._id}, desc: {conflict['description']} "
-                f"repo_root: {conflict.get('repo_root', '<unknown>')} "
-                f"metadata: {conflict.get('metadata')}"
-            )
-        else:
-            self._do_start.set()
+        if self.status == LocalWorkerManagerStatus.initial and self._task is not None:
+            self._check_conflict()
 
     def _worker_managers_changed(self, mod):
+        self._check_conflict()
+
+    def _check_conflict(self):
         conflict = self._worker_managers.get(self._id)
         if (
-            self.status == LocalWorkerManagerStatus.conflict
-            and conflict is None
+            self.status in [
+                LocalWorkerManagerStatus.conflict,
+                LocalWorkerManagerStatus.initial,
+            ]
+            and (
+                conflict is None
+                or not conflict.get("connected", True)
+            )
         ):
-            log.info("Conflict resolved starting local worker manager")
-            self._status_changed(LocalWorkerManagerStatus.not_started)
+            if self.status == LocalWorkerManagerStatus.conflict:
+                log.info("Conflict resolved starting local worker manager")
+            elif self.status == LocalWorkerManagerStatus.initial:
+                log.debug("Starting local worker manager")
+
+            self._status_changed(LocalWorkerManagerStatus.starting)
             self._do_start.set()
         elif (
-            conflict is not None
-            and self.status == LocalWorkerManagerStatus.failed
+            self.status in [
+                LocalWorkerManagerStatus.initial,
+                LocalWorkerManagerStatus.failed,
+            ]
+            and conflict is not None
+            and conflict.get("connected", True)
         ):
-            self._status_changed(LocalWorkerManagerStatus.conflict)
+            if self.status == LocalWorkerManagerStatus.failed:
+                when_msg = "connected whilst we were failed"
+            else:
+                when_msg = "in initial data"
+
             log.warning(
-                f"Conflicting worker manager connected whilst we were failed "
+                f"Conflicting worker manager {when_msg} "
                 f"id: {self._id}, desc: {conflict['description']} "
                 f"repo_root: {conflict.get('repo_root', '<unknown>')} "
                 f"metadata: {conflict.get('metadata')}"
             )
+            self._status_changed(LocalWorkerManagerStatus.conflict)
 
     async def _run(self):
         try:
@@ -160,7 +170,7 @@ class LocalWorkerManager:
         atexit_register_coroutine(self._stop)
 
         if self._worker_managers is not None:
-            self._check_start()
+            self._check_conflict()
 
     def restart(self):
         if self.status != LocalWorkerManagerStatus.failed:
