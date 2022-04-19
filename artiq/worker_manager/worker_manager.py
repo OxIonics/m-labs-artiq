@@ -198,7 +198,16 @@ class WorkerManager:
             log.warning("Couldn't determine local username", exc_info=True)
             username = "<unknown>"
 
-        exe = sys.modules["__main__"].__file__
+        try:
+            exe = sys.modules["__main__"].__file__
+        except AttributeError:
+            # In the case that python has been started with a script passed by
+            # "-c" or is in interactive mode __main__ won't have a file member.
+            # One of the cases that triggers that is poetry launching a
+            # configured script from the current project (and possibly develop
+            # dependencies). In that case poetry sets argv[0] appropriately.
+            # other wise this is better than nothing (often not by much)
+            exe = sys.argv[0]
 
         await self._send({
             "action": "hello",
