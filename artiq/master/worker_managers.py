@@ -431,14 +431,18 @@ class WorkerManagerProxy:
         self._on_dispose.append(cb)
 
     def get_info(self):
+        if self.disconnection_time is None:
+            disconnection_time = None
+        else:
+            disconnection_time = self.disconnection_time.isoformat()
         return {
             "id": self.id,
             "description": self.description,
             "repo_root": self.repo_root,
             "metadata": self.metadata,
             "connected": self.connected,
-            "connection_time": self.connection_time,
-            "disconnection_time": self.disconnection_time,
+            "connection_time": self.connection_time.isoformat(),
+            "disconnection_time": disconnection_time,
         }
 
 

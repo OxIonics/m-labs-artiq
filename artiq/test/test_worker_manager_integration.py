@@ -328,10 +328,9 @@ async def test_tracks_worker_manager_disconnection_time(
 
     assert start <= proxy.disconnection_time <= end
     assert worker_manager_db.notifier.raw_view[manager_id]["connected"] is False
-    assert (
-            worker_manager_db.notifier.raw_view[manager_id]["disconnection_time"]
-            == proxy.disconnection_time
-    )
+    assert datetime.fromisoformat(
+        worker_manager_db.notifier.raw_view[manager_id]["disconnection_time"]
+    ) == proxy.disconnection_time
 
 
 async def test_allows_reconnection(
@@ -359,7 +358,6 @@ async def test_allows_reconnection(
 
         assert start <= proxy.connection_time <= end
         assert worker_manager_db.notifier.raw_view[manager_id]["connected"] is True
-        assert (
+        assert datetime.fromisoformat(
             worker_manager_db.notifier.raw_view[manager_id]["connection_time"]
-            == proxy.connection_time
-        )
+        ) == proxy.connection_time
