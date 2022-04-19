@@ -58,7 +58,7 @@ class WorkerManagerDB:
             reader,
             writer,
         )
-        mgr.add_on_close(lambda: self._update_connection_state(manager_id))
+        mgr.add_on_disconnect(lambda: self._update_connection_state(manager_id))
         self.notifier[manager_id] = mgr.get_info()
         log.info(
             f"New worker manager connection id={manager_id} "
@@ -174,7 +174,8 @@ class WorkerManagerProxy:
         self._run_task: Optional[asyncio.Task] = None
         self._workers: Dict[str, _ManagedWorkerState] = {}
         self._inprogress_scans: Dict[str, asyncio.Future] = {}
-        self._on_close: List[Callable[[], None]] = []
+        self._on_disconnect: List[Callable[[], None]] = []
+        self._on_dispose: List[Callable[[], None]] = []
         self.connection_time: datetime
         self.disconnection_time: Optional[datetime] = None
         self.reconnect(hello, reader, writer)
@@ -207,7 +208,7 @@ class WorkerManagerProxy:
         )
 
     async def _run(self):
-        initiate_close = False
+        initiate_disconnect = False
         try:
             while True:
                 line = await self._reader.readline()
@@ -234,24 +235,24 @@ class WorkerManagerProxy:
                     raise RuntimeError(f"Unexpected action {action}")
         except asyncio.CancelledError:
             log.info("Worker manager proxy stopping")
-            initiate_close = True
+            initiate_disconnect = True
         except ConnectionError as ex:
             log.exception(f"Connection error: {ex}")
         except Exception:
             # This is signalled to the worker manager by closing
-            # the connection and to all ManagedWorkerTransports in `_close`
+            # the connection and to all ManagedWorkerTransports in `_disconnect`
             log.exception(
                 "Unhandled exception in handling message from worker manager",
             )
-            initiate_close = True
+            initiate_disconnect = True
         finally:
             log.info(f"Shutting down worker manager {self._id}")
-            await self._close(initiate_close)
+            await self._disconnect(initiate_disconnect)
 
-    async def _close(self, initiate_close):
+    async def _disconnect(self, initiate):
         self.disconnection_time = datetime.now()
         self._run_task = None
-        for cb in self._on_close:
+        for cb in self._on_disconnect:
             cb()
         workers = list(self._workers.values())
         self._workers.clear()
@@ -278,7 +279,7 @@ class WorkerManagerProxy:
                 log.warning(
                     f"Failed to put end sentinels in {len(pending)} worker queues"
                 )
-        if initiate_close:
+        if initiate:
             await shutdown_and_drain(self._reader, self._writer)
         self._writer.close()
         await self._writer.wait_closed()
@@ -394,7 +395,7 @@ class WorkerManagerProxy:
         await self._workers[worker_id].closed
 
     async def scan_dir(self, path):
-        # TODO should reject if closed
+        # TODO should reject if disconnected
         scan_id = str(uuid.uuid4())
         future = asyncio.get_event_loop().create_future()
         self._inprogress_scans[scan_id] = future
@@ -423,8 +424,11 @@ class WorkerManagerProxy:
         except asyncio.CancelledError:
             pass
 
-    def add_on_close(self, cb):
-        self._on_close.append(cb)
+    def add_on_disconnect(self, cb):
+        self._on_disconnect.append(cb)
+
+    def add_on_dispose(self, cb):
+        self._on_dispose.append(cb)
 
     def get_info(self):
         return {
