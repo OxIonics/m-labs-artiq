@@ -163,9 +163,12 @@ def summarise_mod(mod):
 
 
 async def shutdown_and_drain(reader: StreamReader, writer: StreamWriter):
-    writer.write_eof()
-    while True:
-        msg = await reader.readline()
-        if not msg:
-            break
-        logger.error(f"Unhandled message: {msg!r}")
+    try:
+        writer.write_eof()
+        while True:
+            msg = await reader.readline()
+            if not msg:
+                break
+            logger.error(f"Unhandled message: {msg!r}")
+    except OSError as ex:
+        logger.warning(f"Ignoring error during socket shutdown: {ex}")
