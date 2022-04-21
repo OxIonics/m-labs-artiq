@@ -1,5 +1,6 @@
 import os, sys
 import numpy
+from opentelemetry import trace
 
 from pythonparser import diagnostic
 
@@ -127,8 +128,12 @@ class Core:
             nonlocal result
             result = new_result
 
-        embedding_map, kernel_library, symbolizer, demangler = \
-            self.compile(function, args, kwargs, set_result)
+        with trace.get_tracer(__name__).start_as_current_span(
+            "artiq-compile",
+            attributes={"function": function.__name__},
+        ):
+            embedding_map, kernel_library, symbolizer, demangler = \
+                self.compile(function, args, kwargs, set_result)
 
         if self.first_run:
             self.comm.check_system_info()

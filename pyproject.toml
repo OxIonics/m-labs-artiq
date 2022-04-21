@@ -63,6 +63,7 @@ sphinx = {version = "^4.3.2", optional = true}
 sphinx-rtd-theme = {version = "^1.0.0", optional = true}
 sphinx-argparse = {version = "^0.3.1", optional = true}
 sphinxcontrib-wavedrom = {version = "^3.0.2", optional = true}
+opentelemetry-api = "^1.11.0"
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.2.5"
