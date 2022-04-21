@@ -112,7 +112,7 @@ class ScheduleDock(QtWidgets.QDockWidget):
         self.table.setModel(self.table_model)
 
     def set_worker_manager_model(self, model):
-        self.worker_managers = model.backing_store
+        self.worker_managers = model
         self.table_model.worker_managers = self.worker_managers
 
     async def delete(self, rid, graceful):

@@ -55,9 +55,13 @@ class WorkerManagerDB:
         self.notifier[manager_id] = {
             "id": manager_id,
             "description": mgr.description,
+            "repo_root": mgr.repo_root,
+            "metadata": mgr.metadata,
         }
         log.info(
-            f"New worker manager connection id={manager_id} description={mgr.description}"
+            f"New worker manager connection id={manager_id} "
+            f"description={mgr.description} repo_root={mgr.repo_root} "
+            f"metadata={mgr.metadata}"
         )
 
     def get_ports(self):
@@ -71,15 +75,31 @@ class WorkerManagerDB:
             reader: asyncio.StreamReader,
             writer: asyncio.StreamWriter,
     ):
-        hello = pyon.decode(await reader.readline())
-        if hello["action"] != "hello":
-            # TODO: close connection etc.
-            raise RuntimeError(
-                f"Unexpected action {hello['action']}, expecting hello"
-            )
+        try:
+            hello = pyon.decode(await reader.readline())
+            if hello["action"] != "hello":
+                raise RuntimeError(
+                    f"Unexpected action {hello['action']}, expecting hello"
+                )
 
-        manager_id = hello["manager_id"]
-        self._create_worker_manager(manager_id, hello, reader, writer)
+            manager_id = hello["manager_id"]
+            existing_proxy = self._worker_managers.get(manager_id)
+            if existing_proxy:
+                raise RuntimeError(
+                    "Worker manager connection attempt with ID that's already "
+                    f"connected. ID {manager_id}. "
+                    f"Already in use by {existing_proxy.description} "
+                    f"metadata: {existing_proxy.metadata}"
+                )
+        except Exception as ex:
+            log.exception("Failed to handle worker manager connection")
+            writer.write(pyon.encode({
+                "action": "error",
+                "msg": str(ex),
+            }).encode())
+            writer.close()
+        else:
+            self._create_worker_manager(manager_id, hello, reader, writer)
 
     def get_proxy(self, worker_manager_id) -> WorkerManagerProxy:
         try:
@@ -147,6 +167,7 @@ class WorkerManagerProxy:
         self._inprogress_scans: Dict[str, asyncio.Future] = {}
         self._on_close: List[Callable[[], None]] = [detach]
         self._closed = False
+        self.metadata = hello.get("metadata", {})
 
     @property
     def id(self):

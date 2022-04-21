@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import QFileDialog
 
 from artiq.dashboard.experiments import make_url
 from artiq.gui.tools import LayoutWidget
-from artiq.gui.models import DictSyncModel, DictSyncTreeSepModel
+from artiq.gui.models import DictSyncModel, DictSyncTreeSepModel, ReplicantModelManager
 from artiq.gui.waitingspinnerwidget import QtWaitingSpinner
 
 
@@ -273,7 +273,7 @@ class WorkerManagerModel(DictSyncModel):
         if role == QtCore.Qt.UserRole:
             return v
         elif role == QtCore.Qt.DisplayRole:
-            if v["id"] == self.local_worker_manager_id:
+            if self.local_worker_manager is not None and v["id"] == self.local_worker_manager.id:
                 return "-- local --"
             else:
                 return v["description"]
@@ -301,10 +301,10 @@ class ExplorerDock(QtWidgets.QDockWidget):
                  explist_sub, explist_status_sub,
                  worker_manager_sub,
                  schedule_ctl, experiment_db_ctl, device_db_ctl,
-                 local_worker_manager_id):
+                 local_worker_manager):
         QtWidgets.QDockWidget.__init__(self, "Explorer")
         self.active_worker_manager_id = None
-        self.local_worker_manager_id = local_worker_manager_id
+        self.local_worker_manager = local_worker_manager
         self.experiment_db_ctl = experiment_db_ctl
         self.setObjectName("Explorer")
         self.setFeatures(QtWidgets.QDockWidget.DockWidgetMovable |
@@ -319,7 +319,11 @@ class ExplorerDock(QtWidgets.QDockWidget):
 
         top_widget.addWidget(QtWidgets.QLabel("Repo:"), 0, 0)
         self.repo_select = QtWidgets.QComboBox(self)
-        worker_manager_sub.add_setmodel_callback(self.set_repo_model)
+        ReplicantModelManager.with_setmodel_callback(
+            worker_manager_sub,
+            WorkerManagerModel,
+            self.set_repo_model,
+        )
         self.repo_select.currentIndexChanged.connect(self._repo_selected_changed)
         top_widget.addWidget(self.repo_select, 0, 1)
 
@@ -447,7 +451,7 @@ class ExplorerDock(QtWidgets.QDockWidget):
         self.status_model.set_explorer(self)
 
     def set_repo_model(self, model: WorkerManagerModel):
-        model.local_worker_manager_id = self.local_worker_manager_id
+        model.local_worker_manager = self.local_worker_manager
         self.repo_select.setModel(model)
 
     def _get_selected_expname(self):

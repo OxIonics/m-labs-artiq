@@ -16,7 +16,7 @@ from sipyco import pyon
 
 from artiq.gui.entries import procdesc_to_entry, ScanEntry
 from artiq.gui.tools import LayoutWidget, log_level_to_name, get_open_file_name
-
+from artiq.tools import summarise_mod
 
 logger = logging.getLogger(__name__)
 
@@ -257,7 +257,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
         exp = manager.resolve_expurl(expurl)
         if exp.worker_manager_id is None:
             worker_manager_desc = "-- builtin --"
-        elif exp.worker_manager_id == manager.local_worker_manager_id:
+        elif exp.worker_manager_id == manager.local_worker_manager.id:
             worker_manager_desc = "-- local --"
         else:
             try:
@@ -277,27 +277,54 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
         qfm = QtGui.QFontMetrics(self.font())
         self.resize(100*qfm.averageCharWidth(), 30*qfm.lineSpacing())
 
-        self.setWindowTitle(self._make_title(manager, expurl))
         self.setWindowIcon(QtWidgets.QApplication.style().standardIcon(
             QtWidgets.QStyle.SP_FileDialogContentsView))
 
+        self.manager = manager
+        self.expurl = expurl
+        self.argeditor = None
+        self.argeditor_state = None
+        self.loaded = False
+
+        self.layout = None
+        self.repo_rev = None
+        self.hdf5_load_directory = os.path.expanduser("~")
+
+        self.try_load()
+
+    def try_load(self):
+        try:
+            self.manager.resolve_expurl(self.expurl)
+        except (UnknownWorkerManagerError, MissingExperimentError) as ex:
+            logger.debug(f"Failed to load experiment: {ex}")
+            self.show_missing(str(ex))
+        else:
+            self.show_experiment()
+
+    def show_missing(self, msg):
+        self.setWindowTitle(f"Missing: {self.expurl}")
+
+        self.layout = QtWidgets.QVBoxLayout()
+        self.layout.addStretch(2)
+        self.layout.addWidget(QtWidgets.QLabel(
+            f"Failed to load experiment. {msg}"
+        ))
+        self.layout.addStretch(2)
+
+        self._replaceContents()
+
+    def show_experiment(self):
+        self.setWindowTitle(self._make_title(self.manager, self.expurl))
+
         self.layout = QtWidgets.QGridLayout()
-        top_widget = QtWidgets.QWidget()
-        top_widget.setLayout(self.layout)
-        self.setWidget(top_widget)
         self.layout.setSpacing(5)
         self.layout.setContentsMargins(5, 5, 5, 5)
 
-        self.manager = manager
-        self.expurl = expurl
-
-        editor_class = self.manager.get_argument_editor_class(expurl)
-        self.argeditor = editor_class(self.manager, self, self.expurl)
-        self.layout.addWidget(self.argeditor, 0, 0, 1, 5)
         self.layout.setRowStretch(0, 1)
+        self._create_argeditor()
 
-        scheduling = manager.get_submission_scheduling(expurl)
-        options = manager.get_submission_options(expurl)
+        scheduling = self.manager.get_submission_scheduling(self.expurl)
+        options = self.manager.get_submission_options(self.expurl)
 
         datetime = QtWidgets.QDateTimeEdit()
         datetime.setDisplayFormat("MMM d yyyy hh:mm:ss")
@@ -325,8 +352,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
             scheduling["due_date"] = due_date
         datetime_en.stateChanged.connect(update_datetime_en)
 
-        self.pipeline_name = QtWidgets.QLineEdit()
-        pipeline_name = self.pipeline_name
+        pipeline_name = QtWidgets.QLineEdit()
         self.layout.addWidget(QtWidgets.QLabel("Pipeline:"), 1, 2)
         self.layout.addWidget(pipeline_name, 1, 3)
 
@@ -336,8 +362,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
             scheduling["pipeline_name"] = text
         pipeline_name.textChanged.connect(update_pipeline_name)
 
-        self.priority = QtWidgets.QSpinBox()
-        priority = self.priority
+        priority = QtWidgets.QSpinBox()
         priority.setRange(-99, 99)
         self.layout.addWidget(QtWidgets.QLabel("Priority:"), 2, 0)
         self.layout.addWidget(priority, 2, 1)
@@ -348,8 +373,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
             scheduling["priority"] = value
         priority.valueChanged.connect(update_priority)
 
-        self.flush = QtWidgets.QCheckBox("Flush")
-        flush = self.flush
+        flush = QtWidgets.QCheckBox("Flush")
         flush.setToolTip("Flush the pipeline (of current- and higher-priority "
                          "experiments) before starting the experiment")
         self.layout.addWidget(flush, 2, 2, 1, 2)
@@ -399,7 +423,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
 
         submit = QtWidgets.QPushButton("Submit")
         submit.setIcon(QtWidgets.QApplication.style().standardIcon(
-                QtWidgets.QStyle.SP_DialogOkButton))
+            QtWidgets.QStyle.SP_DialogOkButton))
         submit.setToolTip("Schedule the experiment (Ctrl+Return)")
         submit.setShortcut("CTRL+RETURN")
         submit.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
@@ -409,7 +433,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
 
         reqterm = QtWidgets.QPushButton("Terminate instances")
         reqterm.setIcon(QtWidgets.QApplication.style().standardIcon(
-                QtWidgets.QStyle.SP_DialogCancelButton))
+            QtWidgets.QStyle.SP_DialogCancelButton))
         reqterm.setToolTip("Request termination of instances (Ctrl+Backspace)")
         reqterm.setShortcut("CTRL+BACKSPACE")
         reqterm.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
@@ -417,7 +441,17 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
         self.layout.addWidget(reqterm, 3, 4)
         reqterm.clicked.connect(self.reqterm_clicked)
 
-        self.hdf5_load_directory = os.path.expanduser("~")
+        self.loaded = True
+        self._replaceContents()
+
+    def _replaceContents(self):
+        old_widget = self.widget()
+        if old_widget:
+            old_widget.deleteLater()
+
+        top_widget = QtWidgets.QWidget()
+        top_widget.setLayout(self.layout)
+        self.setWidget(top_widget)
 
     def submit_clicked(self):
         self.argeditor.about_to_submit()
@@ -458,13 +492,24 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
                 arginfo[k][0]["default"] = v
         self.manager.initialize_submission_arguments(self.expurl, arginfo, ui_name)
 
-        argeditor_state = self.argeditor.save_state()
-        self.argeditor.deleteLater()
+        self._recreate_argeditor()
 
+    def _remove_argeditor(self):
+        self.argeditor_state = self.argeditor.save_state()
+        self.argeditor.deleteLater()
+        self.argeditor = None
+
+    def _create_argeditor(self):
         editor_class = self.manager.get_argument_editor_class(self.expurl)
         self.argeditor = editor_class(self.manager, self, self.expurl)
-        self.argeditor.restore_state(argeditor_state)
+        if self.argeditor_state is not None:
+            self.argeditor.restore_state(self.argeditor_state)
+            self.argeditor_state = None
         self.layout.addWidget(self.argeditor, 0, 0, 1, 5)
+
+    def _recreate_argeditor(self):
+        self._remove_argeditor()
+        self._create_argeditor()
 
     def contextMenuEvent(self, event):
         menu = QtWidgets.QMenu(self)
@@ -487,7 +532,6 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
         self.priority.setValue(scheduling["priority"])
         self.pipeline_name.setText(scheduling["pipeline_name"])
         self.flush.setChecked(scheduling["flush"])
-
 
     def _load_hdf5_clicked(self):
         asyncio.ensure_future(self._load_hdf5_task())
@@ -527,21 +571,37 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
         await self._recompute_arguments_task(arguments)
 
     def closeEvent(self, event):
-        self.argeditor.about_to_close()
+        if self.argeditor:
+            self.argeditor.about_to_close()
         self.sigClosed.emit()
         QtWidgets.QMdiSubWindow.closeEvent(self, event)
 
     def save_state(self):
+        if self.argeditor:
+            argeditor_state = self.argeditor.save_state()
+        else:
+            argeditor_state = self.argeditor_state
         return {
-            "args": self.argeditor.save_state(),
+            "args": argeditor_state,
             "geometry": bytes(self.saveGeometry()),
             "hdf5_load_directory": self.hdf5_load_directory
         }
 
     def restore_state(self, state):
-        self.argeditor.restore_state(state["args"])
+        if self.argeditor:
+            self.argeditor.restore_state(state["args"])
+        else:
+            self.argeditor_state = state["args"]
         self.restoreGeometry(QtCore.QByteArray(state["geometry"]))
         self.hdf5_load_directory = state["hdf5_load_directory"]
+
+
+class UnknownWorkerManagerError(Exception):
+    pass
+
+
+class MissingExperimentError(Exception):
+    pass
 
 
 class ExperimentManager:
@@ -553,12 +613,12 @@ class ExperimentManager:
                  explist_sub, schedule_sub,
                  worker_manager_sub,
                  schedule_ctl, experiment_db_ctl,
-                 local_worker_manager_id,
+                 local_worker_manager,
                  ):
         self.main_window = main_window
         self.schedule_ctl = schedule_ctl
         self.experiment_db_ctl = experiment_db_ctl
-        self.local_worker_manager_id = local_worker_manager_id
+        self.local_worker_manager = local_worker_manager
 
         self.dock_states = dict()
         self.submission_scheduling = dict()
@@ -570,10 +630,12 @@ class ExperimentManager:
         dataset_sub.add_setmodel_callback(self.set_dataset_model)
         self.explist = dict()
         explist_sub.add_setmodel_callback(self.set_explist_model)
+        explist_sub.notify_cbs.append(self._explist_update)
         self.schedule = dict()
         schedule_sub.add_setmodel_callback(self.set_schedule_model)
         self.worker_managers = {}
         worker_manager_sub.add_setmodel_callback(self.set_worker_manager_model)
+        worker_manager_sub.notify_cbs.append(self._worker_manager_update)
 
         self.open_experiments = dict()
 
@@ -583,11 +645,36 @@ class ExperimentManager:
     def set_explist_model(self, model):
         self.explist = model.backing_store
 
+    def _explist_update(self, mod):
+        logger.info(f"Explist {summarise_mod(mod)}")
+
+        # This is pretty indiscriminate. In theory, we should be able to target
+        # the load of only the experiments that have just been added to
+        # explist. But that opens up an edge case around worker managers
+        # appearing, but with a different set of experiments. And it seems like
+        # an unnecessary optimisation at the moment.
+        if mod["action"] in ["init", "setitem"]:
+            for exp in self.open_experiments.values():
+                if not exp.loaded:
+                    exp.try_load()
+
+    def _worker_manager_update(self, mod):
+        # This is necessary so that any files (i.e. outside repo experiments)
+        # can have an opportunity to load after the worker manager.
+
+        logger.info(f"Wkr-mgr {summarise_mod(mod)}")
+
+        # This is pretty indiscriminate. See explist_update
+        if mod["action"] in ["init", "setitem"]:
+            for exp in self.open_experiments.values():
+                if not exp.loaded:
+                    exp.try_load()
+
     def set_schedule_model(self, model):
         self.schedule = model.backing_store
 
     def set_worker_manager_model(self, model):
-        self.worker_managers = model.backing_store
+        self.worker_managers = model
 
     def resolve_expurl(self, expurl):
         parsed = urllib.parse.urlparse(expurl)
@@ -596,8 +683,26 @@ class ExperimentManager:
         if parsed.hostname:
             worker_manager_id = parsed.hostname
             urlpath = urlpath[1:]
+        # Check worker_managers not explist because this might be a file
+        # experiment from a non-scanned worker manager
+        if worker_manager_id is not None and worker_manager_id not in self.worker_managers:
+            raise UnknownWorkerManagerError(
+                f"Experiment references unknown worker manager ({worker_manager_id})"
+            )
         if parsed.scheme == "repo":
-            expinfo = self.explist[worker_manager_id][urlpath]
+            try:
+                explist = self.explist[worker_manager_id]
+            except KeyError as ex:
+                raise UnknownWorkerManagerError(
+                    f"Repo experiment references worker manager "
+                    f"({worker_manager_id}) which has not been scanned"
+                ) from ex
+            try:
+                expinfo = explist[urlpath]
+            except KeyError as ex:
+                raise MissingExperimentError(
+                    f"Experiment {urlpath} can't be found in repository"
+                )
             return ExpUrlResolution(
                 True,
                 worker_manager_id,
@@ -806,7 +911,7 @@ class ExperimentManager:
             self.open_experiment(expurl)
 
     async def open_local_file(self, file):
-        await self.open_file(file, self.local_worker_manager_id)
+        await self.open_file(file, self.local_worker_manager.id)
 
     def save_state(self):
         for expurl, dock in self.open_experiments.items():

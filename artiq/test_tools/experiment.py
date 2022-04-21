@@ -13,6 +13,7 @@ from sipyco import pc_rpc, sync_struct
 from artiq.consts import CONTROL_PORT, NOTIFY_PORT, WORKER_MANAGER_PORT
 from artiq.language import EnvExperiment
 from artiq.test_tools.thread_worker_transport import ThreadWorkerTransport
+from artiq.tools import summarise_mod
 from artiq.worker_manager.worker_manager import WorkerManager
 
 log = logging.getLogger(__name__)
@@ -119,17 +120,6 @@ async def _rpc_client(master, control_port, target):
         yield master_client
     finally:
         master_client.close_rpc()
-
-
-def summarise_mod(mod):
-    if mod["action"] == "init":
-        return "init"
-    elif mod["action"] in ["append", "insert", "pop"]:
-        return f"{mod['action']} on {mod['path']}"
-    elif mod["action"] in ["setitem", "delitem"]:
-        return f"{mod['action']} '{mod['key']}' in {mod['path']}"
-    else:
-        return f"Unknown action ({mod['action']}"
 
 
 async def _clean_datasets(dataset_client, dataset, rid):

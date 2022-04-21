@@ -1,4 +1,5 @@
-import collections
+from copy import deepcopy
+from typing import Callable
 
 from PyQt5 import QtCore
 
@@ -29,6 +30,53 @@ class ModelSubscriber(ModelManager, Subscriber):
         ModelManager.__init__(self, model_factory)
         Subscriber.__init__(self, notifier_name, self._create_model,
                             disconnect_cb=disconnect_cb)
+
+
+class ReplicantModelManager(ModelManager):
+    """ Allows adding another model manager on to a ModelSubscriber
+
+    The model_factory for the ModelSubscriber that's used should be a plain
+    data type. Probably `dict` or `list`.
+
+    The easiest way to use this is:
+    ```
+    sub = ModelSubscriber(notifier_name, dict)
+    sub.connect()
+
+    ReplicantModelManager.with_setmodel_callback(
+        sub, MyModelClass, set_my_model_callback
+    )
+
+    ReplicantModelManager.with_setmodel_callback(
+        sub, AnotherModel, set_another_model_callback,
+    )
+    ```
+
+    This allows you to have independent models driven from the same subscriber
+    """
+
+    @classmethod
+    def with_setmodel_callback(
+            cls,
+            model_subscriber: ModelSubscriber,
+            model_factory: Callable,
+            set_model_callback: Callable,
+    ):
+        instance = cls(model_subscriber, model_factory)
+        instance.add_setmodel_callback(set_model_callback)
+        return instance
+
+    def __init__(self, model_subscriber: ModelSubscriber, model_factory):
+        super(ReplicantModelManager, self).__init__(model_factory)
+        model_subscriber.notify_cbs.append(self._process_mod)
+        if model_subscriber.model is not None:
+            self._create_model(deepcopy(model_subscriber.model))
+
+    def _process_mod(self, mod):
+        if mod["action"] == "init":
+            self._create_model(deepcopy(mod["struct"]))
+        else:
+            process_mod(self.model, mod)
 
 
 class LocalModelManager(ModelManager):
@@ -166,6 +214,27 @@ class DictSyncModel(QtCore.QAbstractTableModel):
 
     def convert(self, k, v, column, role):
         raise NotImplementedError
+
+
+class DictSyncSimpleTableModel(DictSyncModel):
+
+    class RowSpec:
+        def __init__(self, title, get_display):
+            self.title = title
+            self.get_display = get_display
+
+    def __init__(self, specs, init):
+        super(DictSyncSimpleTableModel, self).__init__(
+            [spec.title for spec in specs],
+            init,
+        )
+        self.specs = specs
+
+    def convert(self, k, v, column, role):
+        if role != QtCore.Qt.DisplayRole:
+            return None
+
+        return self.specs[column].get_display(k, v)
 
 
 class ListSyncModel(QtCore.QAbstractTableModel):
