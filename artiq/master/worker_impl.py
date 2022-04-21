@@ -18,7 +18,7 @@ import traceback
 from collections import OrderedDict
 
 import h5py
-
+from opentelemetry import trace
 from sipyco import pipe_ipc, pyon
 from sipyco.packed_exceptions import raise_packed_exc
 from sipyco.logging_tools import multiline_log_config
@@ -26,7 +26,7 @@ import zlib
 
 import artiq
 from artiq import tools
-from artiq.master.worker_db import DeviceManager, DatasetManager, DummyDevice
+from artiq.master.worker_db import DeviceError, DeviceManager, DatasetManager, DummyDevice
 from artiq.language.environment import (
     is_public_experiment, TraceArgumentManager, ProcessArgumentManager
 )
@@ -406,6 +406,12 @@ def main(argv=None):
     if args.import_hook:
         import_cache.install_hook()
 
+    try:
+        device_mgr.get("tracing").start("artiq-worker")
+    except DeviceError:
+        pass
+
+    tracer = trace.get_tracer("worker")
     try:
         while True:
             obj = get_object()
