@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import timedelta
 import getpass
 import logging
 import os
@@ -161,6 +162,7 @@ class WorkerManager:
             exit_on_idle=False,
             repo_root=None,
             parent=None,
+            reconnect_timeout=timedelta(seconds=0),
     ):
         if worker_manager_id is None:
             worker_manager_id = str(uuid.uuid4())
@@ -181,6 +183,7 @@ class WorkerManager:
         self._log_forwarder: Optional[ForwardHandler] = None
         self.stop_request = asyncio.Event()
         self.parent = parent
+        self.reconnect_timeout = reconnect_timeout
 
     @property
     def id(self):
@@ -213,6 +216,7 @@ class WorkerManager:
             "manager_id": self._id,
             "manager_description": self._description,
             "repo_root": self._repo_root,
+            "reconnect_timeout_seconds": self.reconnect_timeout.total_seconds(),
             "metadata": {
                 "pid": os.getpid(),
                 "hostname": socket.getfqdn(),

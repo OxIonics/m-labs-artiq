@@ -1,5 +1,6 @@
 import argparse
 import asyncio
+from datetime import timedelta
 import logging
 import signal
 import sys
@@ -75,6 +76,11 @@ def main():
     else:
         transport_factory = PipeWorkerTransport
 
+    if args.id is None:
+        reconnect_timeout = timedelta(seconds=0)
+    else:
+        reconnect_timeout = timedelta(days=7)
+
     loop = asyncio.get_event_loop()
     mgr = loop.run_until_complete(
         WorkerManager.create(
@@ -85,6 +91,7 @@ def main():
             exit_on_idle=args.exit_on_idle,
             transport_factory=transport_factory,
             parent=args.parent,
+            reconnect_timeout=reconnect_timeout,
         )
     )
     try:

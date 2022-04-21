@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 import logging
 from typing import AsyncIterator, Callable, Dict, List, Optional, Tuple
 import uuid
@@ -41,15 +41,68 @@ class WorkerManagerDB:
         # suitable for PYON serialisation.
         # Modifications to self._worker_managers must also modify this notifier.
         self.notifier: Notifier = Notifier({})
+        self._reconnection_timeout_handle: Optional[asyncio.TimerHandle] = None
+        self._next_worker_manager_to_dispose: Optional[WorkerManagerProxy] = None
 
-    # TODO: remove old worker managers
-    def _remove_worker_manager(self, manager_id):
-        self._worker_managers.pop(manager_id, None)
-        self.notifier.pop(manager_id)
+    def _dispose_of_worker_manager(self, mgr):
+        del self._worker_managers[mgr.id]
+        del self.notifier[mgr.id]
+        if mgr is not None:
+            mgr.dispose()
 
     def _update_connection_state(self, manager_id):
         mgr = self._worker_managers[manager_id]
         self.notifier[manager_id] = mgr.get_info()
+        if not mgr.connected:
+            self._check_disconnecting_worker_manager_is_next_to_dispose(mgr)
+        elif manager_id == self._next_worker_manager_to_dispose.id:
+            self._reconnection_timeout_handle.cancel()
+            self._find_next_worker_manager_to_dispose()
+
+    def _check_disconnecting_worker_manager_is_next_to_dispose(self, mgr):
+        if self._reconnection_timeout_handle is None:
+            pass
+        elif mgr.disposal_time < self._next_worker_manager_to_dispose.disposal_time:
+            self._reconnection_timeout_handle.cancel()
+        else:
+            return
+
+        self._set_next_worker_manager_to_dispose(mgr)
+
+    def _find_next_worker_manager_to_dispose(self):
+        disconnected_worker_managers = [
+            mgr
+            for mgr in self._worker_managers.values()
+            if not mgr.connected
+        ]
+        if disconnected_worker_managers:
+            mgr = min(
+                disconnected_worker_managers,
+                key=lambda mgr: mgr.disposal_time
+            )
+            self._set_next_worker_manager_to_dispose(mgr)
+        else:
+            self._next_worker_manager_to_dispose = None
+            self._reconnection_timeout_handle = None
+
+    def _set_next_worker_manager_to_dispose(self, mgr):
+        log.info(
+            f"Setting next worker manager to be disposed to {mgr.id} "
+            f"at {mgr.disposal_time} now: {datetime.now()}"
+        )
+        self._next_worker_manager_to_dispose = mgr
+        self._reconnection_timeout_handle = asyncio.get_event_loop().call_later(
+            (mgr.disposal_time - datetime.now()).total_seconds(),
+            self._reconnect_timeout,
+        )
+
+    def _reconnect_timeout(self):
+        log.info(
+            f"Worker manager not reconnected in timeout, disposing of "
+            f"{self._next_worker_manager_to_dispose.id}",
+        )
+        self._dispose_of_worker_manager(self._next_worker_manager_to_dispose)
+        self._find_next_worker_manager_to_dispose()
 
     def _create_worker_manager(self, manager_id, hello, reader, writer):
         mgr = self._worker_managers[manager_id] = WorkerManagerProxy(
@@ -178,6 +231,7 @@ class WorkerManagerProxy:
         self._on_dispose: List[Callable[[], None]] = []
         self.connection_time: datetime
         self.disconnection_time: Optional[datetime] = None
+        self.reconnect_timeout: timedelta
         self.reconnect(hello, reader, writer)
 
     @property
@@ -188,12 +242,19 @@ class WorkerManagerProxy:
     def connected(self):
         return self._run_task is not None
 
+    @property
+    def disposal_time(self):
+        return self.disconnection_time + self.reconnect_timeout
+
     def reconnect(self, hello, reader, writer):
         if self.connected:
             raise RuntimeError("reconnecting already connected worker manager proxy")
         self.connection_time = datetime.now()
         self.description = hello["manager_description"]
         self.repo_root = hello["repo_root"]
+        self.reconnect_timeout = timedelta(
+            seconds=hello.get("reconnect_timeout_seconds", 0),
+        )
         self.metadata = hello.get("metadata", {})
         self._reader = reader
         self._writer = writer
@@ -444,6 +505,10 @@ class WorkerManagerProxy:
             "connection_time": self.connection_time.isoformat(),
             "disconnection_time": disconnection_time,
         }
+
+    def dispose(self):
+        for cb in self._on_dispose:
+            cb()
 
 
 class ManagedWorkerTransport(WorkerTransport):
