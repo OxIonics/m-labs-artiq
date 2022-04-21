@@ -125,7 +125,6 @@ class WorkerManager:
             **kwargs: More kw only arguments passed to the `WorkerManager
                 constructor
         """
-        logging.warning(f"Temp pid: {os.getpid()}")
         logging.debug(f"Connecting to {host}:{port}")
         reader, writer = await asyncio.open_connection(
             host, port, limit=1 * 1024 * 1024,
