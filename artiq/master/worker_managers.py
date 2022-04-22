@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+from datetime import datetime, timedelta
 import logging
-from typing import AsyncIterator, Callable, Dict, List, Tuple
+from typing import AsyncIterator, Callable, Dict, List, Optional, Tuple
 import uuid
 
+from artiq.tools import shutdown_and_drain
 from sipyco import pyon
 from sipyco.logging_tools import log_with_name
 from sipyco.sync_struct import Notifier
@@ -39,10 +41,68 @@ class WorkerManagerDB:
         # suitable for PYON serialisation.
         # Modifications to self._worker_managers must also modify this notifier.
         self.notifier: Notifier = Notifier({})
+        self._reconnection_timeout_handle: Optional[asyncio.TimerHandle] = None
+        self._next_worker_manager_to_dispose: Optional[WorkerManagerProxy] = None
 
-    def _remove_worker_manager(self, manager_id):
-        self._worker_managers.pop(manager_id, None)
-        self.notifier.pop(manager_id)
+    def _dispose_of_worker_manager(self, mgr):
+        del self._worker_managers[mgr.id]
+        del self.notifier[mgr.id]
+        if mgr is not None:
+            mgr.dispose()
+
+    def _update_connection_state(self, manager_id):
+        mgr = self._worker_managers[manager_id]
+        self.notifier[manager_id] = mgr.get_info()
+        if not mgr.connected:
+            self._check_disconnecting_worker_manager_is_next_to_dispose(mgr)
+        elif manager_id == self._next_worker_manager_to_dispose.id:
+            self._reconnection_timeout_handle.cancel()
+            self._find_next_worker_manager_to_dispose()
+
+    def _check_disconnecting_worker_manager_is_next_to_dispose(self, mgr):
+        if self._reconnection_timeout_handle is None:
+            pass
+        elif mgr.disposal_time < self._next_worker_manager_to_dispose.disposal_time:
+            self._reconnection_timeout_handle.cancel()
+        else:
+            return
+
+        self._set_next_worker_manager_to_dispose(mgr)
+
+    def _find_next_worker_manager_to_dispose(self):
+        disconnected_worker_managers = [
+            mgr
+            for mgr in self._worker_managers.values()
+            if not mgr.connected
+        ]
+        if disconnected_worker_managers:
+            mgr = min(
+                disconnected_worker_managers,
+                key=lambda mgr: mgr.disposal_time
+            )
+            self._set_next_worker_manager_to_dispose(mgr)
+        else:
+            self._next_worker_manager_to_dispose = None
+            self._reconnection_timeout_handle = None
+
+    def _set_next_worker_manager_to_dispose(self, mgr):
+        log.info(
+            f"Setting next worker manager to be disposed to {mgr.id} "
+            f"at {mgr.disposal_time} now: {datetime.now()}"
+        )
+        self._next_worker_manager_to_dispose = mgr
+        self._reconnection_timeout_handle = asyncio.get_event_loop().call_later(
+            (mgr.disposal_time - datetime.now()).total_seconds(),
+            self._reconnect_timeout,
+        )
+
+    def _reconnect_timeout(self):
+        log.info(
+            f"Worker manager not reconnected in timeout, disposing of "
+            f"{self._next_worker_manager_to_dispose.id}",
+        )
+        self._dispose_of_worker_manager(self._next_worker_manager_to_dispose)
+        self._find_next_worker_manager_to_dispose()
 
     def _create_worker_manager(self, manager_id, hello, reader, writer):
         mgr = self._worker_managers[manager_id] = WorkerManagerProxy(
@@ -50,14 +110,9 @@ class WorkerManagerDB:
             hello,
             reader,
             writer,
-            lambda: self._remove_worker_manager(manager_id),
         )
-        self.notifier[manager_id] = {
-            "id": manager_id,
-            "description": mgr.description,
-            "repo_root": mgr.repo_root,
-            "metadata": mgr.metadata,
-        }
+        mgr.add_on_disconnect(lambda: self._update_connection_state(manager_id))
+        self.notifier[manager_id] = mgr.get_info()
         log.info(
             f"New worker manager connection id={manager_id} "
             f"description={mgr.description} repo_root={mgr.repo_root} "
@@ -84,7 +139,7 @@ class WorkerManagerDB:
 
             manager_id = hello["manager_id"]
             existing_proxy = self._worker_managers.get(manager_id)
-            if existing_proxy:
+            if existing_proxy and existing_proxy.connected:
                 raise RuntimeError(
                     "Worker manager connection attempt with ID that's already "
                     f"connected. ID {manager_id}. "
@@ -97,9 +152,15 @@ class WorkerManagerDB:
                 "action": "error",
                 "msg": str(ex),
             }).encode())
+            await shutdown_and_drain(reader, writer)
             writer.close()
+            await writer.wait_closed()
         else:
-            self._create_worker_manager(manager_id, hello, reader, writer)
+            if existing_proxy:
+                existing_proxy.reconnect(hello, reader, writer)
+                self._update_connection_state(manager_id)
+            else:
+                self._create_worker_manager(manager_id, hello, reader, writer)
 
     def get_proxy(self, worker_manager_id) -> WorkerManagerProxy:
         try:
@@ -156,22 +217,48 @@ class WorkerManagerProxy:
         "scan_failed",
     }
 
-    def __init__(self, id_, hello, reader, writer, detach):
+    def __init__(self, id_, hello, reader, writer):
         self._id = id_
-        self.description = hello["manager_description"]
-        self.repo_root = hello["repo_root"]
-        self._reader: asyncio.StreamReader = reader
-        self._writer: asyncio.StreamWriter = writer
-        self._run_task = asyncio.create_task(self._run())
+        self.description: str
+        self.repo_root: str
+        self.metadata: Dict
+        self._reader: Optional[asyncio.StreamReader] = None
+        self._writer: Optional[asyncio.StreamWriter] = None
+        self._run_task: Optional[asyncio.Task] = None
         self._workers: Dict[str, _ManagedWorkerState] = {}
         self._inprogress_scans: Dict[str, asyncio.Future] = {}
-        self._on_close: List[Callable[[], None]] = [detach]
-        self._closed = False
-        self.metadata = hello.get("metadata", {})
+        self._on_disconnect: List[Callable[[], None]] = []
+        self._on_dispose: List[Callable[[], None]] = []
+        self.connection_time: datetime
+        self.disconnection_time: Optional[datetime] = None
+        self.reconnect_timeout: timedelta
+        self.reconnect(hello, reader, writer)
 
     @property
     def id(self):
         return self._id
+
+    @property
+    def connected(self):
+        return self._run_task is not None
+
+    @property
+    def disposal_time(self):
+        return self.disconnection_time + self.reconnect_timeout
+
+    def reconnect(self, hello, reader, writer):
+        if self.connected:
+            raise RuntimeError("reconnecting already connected worker manager proxy")
+        self.connection_time = datetime.now()
+        self.description = hello["manager_description"]
+        self.repo_root = hello["repo_root"]
+        self.reconnect_timeout = timedelta(
+            seconds=hello.get("reconnect_timeout_seconds", 0),
+        )
+        self.metadata = hello.get("metadata", {})
+        self._reader = reader
+        self._writer = writer
+        self._run_task = asyncio.create_task(self._run())
 
     def get_transport(self):
         id_ = str(uuid.uuid4())
@@ -182,10 +269,12 @@ class WorkerManagerProxy:
         )
 
     async def _run(self):
+        initiate_disconnect = False
         try:
             while True:
                 line = await self._reader.readline()
                 if not line:
+                    log.info("Worker manager disconnected")
                     break
                 obj = pyon.decode(line.decode())
                 action = obj["action"]
@@ -206,20 +295,25 @@ class WorkerManagerProxy:
                 else:
                     raise RuntimeError(f"Unexpected action {action}")
         except asyncio.CancelledError:
-            pass
+            log.info("Worker manager proxy stopping")
+            initiate_disconnect = True
+        except ConnectionError as ex:
+            log.exception(f"Connection error: {ex}")
         except Exception:
             # This is signalled to the worker manager by closing
-            # the connection and to all ManagedWorkerTransports in `_close`
+            # the connection and to all ManagedWorkerTransports in `_disconnect`
             log.exception(
                 "Unhandled exception in handling message from worker manager",
             )
+            initiate_disconnect = True
         finally:
             log.info(f"Shutting down worker manager {self._id}")
-            await self._close()
+            await self._disconnect(initiate_disconnect)
 
-    async def _close(self):
-        self._closed = True
-        for cb in self._on_close:
+    async def _disconnect(self, initiate):
+        self.disconnection_time = datetime.now()
+        self._run_task = None
+        for cb in self._on_disconnect:
             cb()
         workers = list(self._workers.values())
         self._workers.clear()
@@ -234,6 +328,7 @@ class WorkerManagerProxy:
             scan_future.set_exception(RuntimeError(
                 "Worker proxy closed during scan",
             ))
+        self._inprogress_scans.clear()
         if workers:
             (_, pending) = await asyncio.wait(
                 [worker.recv_queue.put("") for worker in workers] +
@@ -245,8 +340,12 @@ class WorkerManagerProxy:
                 log.warning(
                     f"Failed to put end sentinels in {len(pending)} worker queues"
                 )
+        if initiate:
+            await shutdown_and_drain(self._reader, self._writer)
         self._writer.close()
         await self._writer.wait_closed()
+        self._reader = None
+        self._writer = None
 
     def _worker_action(self, obj):
         action = obj["action"]
@@ -294,7 +393,7 @@ class WorkerManagerProxy:
     async def create_worker(
             self, worker_id, rid, log_level
     ) -> Tuple[AsyncIterator, AsyncIterator]:
-        if self._closed:
+        if not self.connected:
             # It's possible if we're busy that:
             # * receive scheduler.submit, which creates a ManagedWorkerTransport
             #   for experiment RID=X
@@ -357,6 +456,7 @@ class WorkerManagerProxy:
         await self._workers[worker_id].closed
 
     async def scan_dir(self, path):
+        # TODO should reject if disconnected
         scan_id = str(uuid.uuid4())
         future = asyncio.get_event_loop().create_future()
         self._inprogress_scans[scan_id] = future
@@ -385,8 +485,30 @@ class WorkerManagerProxy:
         except asyncio.CancelledError:
             pass
 
-    def add_on_close(self, cb):
-        self._on_close.append(cb)
+    def add_on_disconnect(self, cb):
+        self._on_disconnect.append(cb)
+
+    def add_on_dispose(self, cb):
+        self._on_dispose.append(cb)
+
+    def get_info(self):
+        if self.disconnection_time is None:
+            disconnection_time = None
+        else:
+            disconnection_time = self.disconnection_time.isoformat()
+        return {
+            "id": self.id,
+            "description": self.description,
+            "repo_root": self.repo_root,
+            "metadata": self.metadata,
+            "connected": self.connected,
+            "connection_time": self.connection_time.isoformat(),
+            "disconnection_time": disconnection_time,
+        }
+
+    def dispose(self):
+        for cb in self._on_dispose:
+            cb()
 
 
 class ManagedWorkerTransport(WorkerTransport):

@@ -22,13 +22,14 @@ from dateutil.parser import parse as parse_date
 
 from prettytable import PrettyTable
 
+from artiq.display_tools import make_connection_string
 from sipyco.pc_rpc import AsyncioClient, Client
 from sipyco.sync_struct import Subscriber
 from sipyco.broadcast import Receiver
 from sipyco import common_args, pyon
 
 from artiq.consts import CONTROL_PORT, NOTIFY_PORT
-from artiq.schedule_display import make_exp_source
+from artiq.display_tools import make_exp_source
 from artiq.tools import short_format, parse_arguments
 from artiq import __version__ as artiq_version
 
@@ -477,13 +478,14 @@ def _show_exp_list(explist):
 def _show_worker_managers(mgrs):
     clear_screen()
     table = PrettyTable([
-        "ManagerID", "Description", "Repo root", "PID", "Host", "User", "Exe",
+        "ManagerID", "Status", "Description", "Repo root", "PID", "Host", "User", "Exe",
         "Parent",
     ])
     for mgr in mgrs.values():
         meta = mgr.get("metadata", {})
+        status = make_connection_string(mgr)
         table.add_row([
-            mgr["id"], mgr["description"], mgr["repo_root"], meta["pid"],
+            mgr["id"], status, mgr["description"], mgr["repo_root"], meta["pid"],
             meta["hostname"], meta["username"], meta["exe"], meta["parent"],
         ])
     print(table)

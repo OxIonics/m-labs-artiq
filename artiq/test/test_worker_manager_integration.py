@@ -1,6 +1,7 @@
 import asyncio
 from contextlib import AsyncExitStack
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 import logging
 from typing import AsyncIterator, Tuple
 import uuid
@@ -120,12 +121,12 @@ async def test_worker_manager_connection(worker_manager_db, worker_manager_port)
         worker_manager = await wait_for(WorkerManager.create(
             BIND, worker_manager_port, manager_id, description,
         ))
-        exit.push_async_callback(worker_manager.stop)
+        exit.push_async_callback(lambda: wait_for(worker_manager.stop))
 
         await wait_for(lambda: assert_num_connection(worker_manager_db))
 
         assert worker_manager_db._worker_managers.keys() == {manager_id}
-        worker_manager_proxy = worker_manager_db._worker_managers[manager_id]
+        worker_manager_proxy = worker_manager_db.get_proxy(manager_id)
         assert worker_manager_proxy.description == description
 
 
@@ -228,6 +229,10 @@ async def test_worker_closing_unexpectedly_forwarded(worker_pair: ConnectedWorke
     assert actual == ""
 
 
+def assert_disconnected(proxy):
+    assert not proxy.connected
+
+
 async def test_late_worker_create_and_then_close(worker_manager_db, worker_manager_port):
     manager_id = str(uuid.uuid4())
     description = "Test workers"
@@ -242,7 +247,7 @@ async def test_late_worker_create_and_then_close(worker_manager_db, worker_manag
         transport = proxy.get_transport()
 
     # Ensure that the proxy has noticed that the worker manager has gone away.
-    await asyncio.wait_for(proxy._run_task, timeout=1.0)
+    await wait_for(lambda: assert_disconnected(proxy))
 
     with pytest.raises(Exception) as exc_info:
         await transport.create("test", logging.DEBUG)
@@ -255,3 +260,266 @@ async def test_late_worker_create_and_then_close(worker_manager_db, worker_manag
     # Defer assertions about exception raised by create until after the more
     # import implicit assertion that transport.close is successful
     assert isinstance(exc_info.value, RuntimeError)
+
+
+async def test_duplicate_worker_manager_connection_rejected(worker_manager_db, worker_manager_port):
+    manager_id = str(uuid.uuid4())
+    description = "Test workers"
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport
+    ):
+        await wait_for(lambda: assert_num_connection(worker_manager_db))
+
+        async with WorkerManager.context(
+                BIND, worker_manager_port, manager_id, description,
+                transport_factory=FakeWorkerTransport
+        ) as worker_manager2:
+
+            await wait_for(worker_manager2.wait_for_exit())
+            # Assert wait for exit returns promptly with no
+            # exception
+
+
+async def test_tracks_worker_manager_connection_time(
+        worker_manager_db, worker_manager_port
+):
+    manager_id = str(uuid.uuid4())
+    description = "Test workers"
+
+    start = datetime.now()
+    async with WorkerManager.context(
+            BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport
+    ):
+        await wait_for(lambda: assert_num_connection(worker_manager_db))
+        end = datetime.now()
+
+        proxy = worker_manager_db.get_proxy(manager_id)
+        assert start <= proxy.connection_time <= end
+
+
+def assert_disconnection_time(proxy):
+    assert proxy.disconnection_time is not None
+
+
+def assert_connection_later_than(proxy, ts):
+    assert proxy.connection_time >= ts
+
+
+async def test_tracks_worker_manager_disconnection_time(
+        worker_manager_db, worker_manager_port
+):
+    manager_id = str(uuid.uuid4())
+    description = "Test workers"
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport,
+            reconnect_timeout=timedelta(seconds=1),
+    ):
+        await wait_for(lambda: assert_num_connection(worker_manager_db))
+        proxy = worker_manager_db.get_proxy(manager_id)
+        assert proxy.disconnection_time is None
+
+        start = datetime.now()
+    await wait_for(lambda: assert_disconnection_time(proxy))
+    end = datetime.now()
+
+    assert start <= proxy.disconnection_time <= end
+    assert worker_manager_db.notifier.raw_view[manager_id]["connected"] is False
+    assert datetime.fromisoformat(
+        worker_manager_db.notifier.raw_view[manager_id]["disconnection_time"]
+    ) == proxy.disconnection_time
+
+
+async def test_allows_reconnection(
+        worker_manager_db, worker_manager_port
+):
+    manager_id = str(uuid.uuid4())
+    description = "Test workers"
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport,
+            reconnect_timeout=timedelta(seconds=1),
+    ):
+        await wait_for(lambda: assert_num_connection(worker_manager_db))
+        proxy = worker_manager_db.get_proxy(manager_id)
+
+    await wait_for(lambda: assert_disconnection_time(proxy))
+
+    start = datetime.now()
+    async with WorkerManager.context(
+            BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport
+    ):
+        await wait_for(lambda: assert_connection_later_than(proxy, start))
+        end = datetime.now()
+
+        assert start <= proxy.connection_time <= end
+        assert worker_manager_db.notifier.raw_view[manager_id]["connected"] is True
+        assert datetime.fromisoformat(
+            worker_manager_db.notifier.raw_view[manager_id]["connection_time"]
+        ) == proxy.connection_time
+
+
+def assert_proxy_removed(manager_id, worker_manager_db):
+    assert manager_id not in worker_manager_db.notifier.raw_view
+
+
+async def test_disposes_of_proxy_when_worker_manager_has_been_disconnected(
+        worker_manager_db, worker_manager_port,
+):
+
+    manager_id = str(uuid.uuid4())
+    description = "Test workers"
+    reconnect_timeout = timedelta(seconds=0.5)
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport,
+            reconnect_timeout=reconnect_timeout,
+    ):
+        await wait_for(lambda: assert_num_connection(worker_manager_db))
+        start = datetime.now()
+
+    assert manager_id in worker_manager_db.notifier.raw_view
+
+    await wait_for(
+        lambda: assert_proxy_removed(manager_id, worker_manager_db),
+        timeout=reconnect_timeout.total_seconds() * 1.5
+    )
+
+    assert (datetime.now() - start).total_seconds() == pytest.approx(
+        reconnect_timeout.total_seconds(),
+        rel=0.1,
+    )
+
+
+async def test_disposes_of_proxies_in_order(
+        worker_manager_db, worker_manager_port,
+):
+
+    reconnect_timeout = timedelta(seconds=0.5)
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port,
+            description="Mgr1",
+            transport_factory=FakeWorkerTransport,
+            reconnect_timeout=reconnect_timeout,
+    ) as mgr1:
+        await wait_for(lambda: assert_num_connection(worker_manager_db))
+        start1 = datetime.now()
+
+    await asyncio.sleep(0.02)
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port,
+            description="Mgr2",
+            transport_factory=FakeWorkerTransport,
+            reconnect_timeout=reconnect_timeout,
+    ) as mgr2:
+        await wait_for(lambda: assert_num_connection(worker_manager_db, 2))
+        start2 = datetime.now()
+
+    assert mgr1.id in worker_manager_db.notifier.raw_view
+    await wait_for(
+        lambda: assert_proxy_removed(mgr1.id, worker_manager_db),
+        timeout=reconnect_timeout.total_seconds()
+    )
+    end1 = datetime.now()
+
+    assert mgr2.id in worker_manager_db.notifier.raw_view
+    await wait_for(
+        lambda: assert_proxy_removed(mgr2.id, worker_manager_db),
+        timeout=reconnect_timeout.total_seconds()
+    )
+    end2 = datetime.now()
+
+    assert (end1 - start1).total_seconds() == pytest.approx(
+        reconnect_timeout.total_seconds(),
+        rel=0.1,
+    )
+    assert (end2 - start2).total_seconds() == pytest.approx(
+        reconnect_timeout.total_seconds(),
+        rel=0.1,
+    )
+
+
+async def test_diposes_of_proxies_in_revers_order(
+        worker_manager_db, worker_manager_port,
+):
+    reconnect_timeout1 = timedelta(seconds=1)
+    reconnect_timeout2 = timedelta(seconds=0.5)
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port,
+            description="Mgr1",
+            transport_factory=FakeWorkerTransport,
+            reconnect_timeout=reconnect_timeout1,
+    ) as mgr1:
+        await wait_for(lambda: assert_num_connection(worker_manager_db))
+        start1 = datetime.now()
+
+    await asyncio.sleep(0.02)
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port,
+            description="Mgr2",
+            transport_factory=FakeWorkerTransport,
+            reconnect_timeout=reconnect_timeout2,
+    ) as mgr2:
+        await wait_for(lambda: assert_num_connection(worker_manager_db, 2))
+        start2 = datetime.now()
+
+    assert mgr2.id in worker_manager_db.notifier.raw_view
+    await wait_for(
+        lambda: assert_proxy_removed(mgr2.id, worker_manager_db),
+        timeout=reconnect_timeout2.total_seconds() * 1.5
+    )
+    end2 = datetime.now()
+
+    assert mgr1.id in worker_manager_db.notifier.raw_view
+    await wait_for(
+        lambda: assert_proxy_removed(mgr1.id, worker_manager_db),
+        timeout=reconnect_timeout1.total_seconds()
+    )
+    end1 = datetime.now()
+
+    assert (end1 - start1).total_seconds() == pytest.approx(
+        reconnect_timeout1.total_seconds(),
+        rel=0.1,
+    )
+    assert (end2 - start2).total_seconds() == pytest.approx(
+        reconnect_timeout2.total_seconds(),
+        rel=0.1,
+    )
+
+
+async def test_doesnt_dispose_of_reconnected_proxies(
+        worker_manager_db, worker_manager_port,
+):
+    manager_id = str(uuid.uuid4())
+    description = "Test workers"
+    reconnect_timeout = timedelta(seconds=0.2)
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport,
+            reconnect_timeout=reconnect_timeout,
+    ):
+        await wait_for(lambda: assert_num_connection(worker_manager_db))
+        proxy = worker_manager_db.get_proxy(manager_id)
+
+    await wait_for(lambda: assert_disconnected(proxy))
+    assert manager_id in worker_manager_db.notifier.raw_view
+
+    async with WorkerManager.context(
+            BIND, worker_manager_port, manager_id, description,
+            transport_factory=FakeWorkerTransport,
+            reconnect_timeout=reconnect_timeout,
+    ):
+        await asyncio.sleep(reconnect_timeout.total_seconds() * 2)
+        assert manager_id in worker_manager_db.notifier.raw_view

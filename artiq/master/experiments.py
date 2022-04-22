@@ -215,7 +215,7 @@ class ExperimentDB:
             pass
 
         proxy = self.worker_manager_db.get_proxy(worker_manager_id)
-        proxy.add_on_close(lambda: self._worker_manager_closed(worker_manager_id))
+        proxy.add_on_dispose(lambda: self._worker_manager_closed(worker_manager_id))
         self.all_explist[worker_manager_id] = {}
         self.all_status[worker_manager_id] = {
             "scanning": False,

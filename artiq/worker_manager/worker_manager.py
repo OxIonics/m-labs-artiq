@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 from contextlib import asynccontextmanager
+from datetime import timedelta
 import getpass
 import logging
 import os
@@ -15,7 +16,7 @@ from sipyco.logging_tools import LogParser
 
 from artiq.consts import WORKER_MANAGER_PORT
 from artiq.master.worker_transport import PipeWorkerTransport, WorkerTransport
-from artiq.tools import get_windows_drives
+from artiq.tools import get_windows_drives, shutdown_and_drain
 from artiq.worker_manager.logging import ForwardHandler
 
 log = logging.getLogger(__name__)
@@ -125,7 +126,6 @@ class WorkerManager:
             **kwargs: More kw only arguments passed to the `WorkerManager
                 constructor
         """
-        logging.warning(f"Temp pid: {os.getpid()}")
         logging.debug(f"Connecting to {host}:{port}")
         reader, writer = await asyncio.open_connection(
             host, port, limit=1 * 1024 * 1024,
@@ -162,6 +162,7 @@ class WorkerManager:
             exit_on_idle=False,
             repo_root=None,
             parent=None,
+            reconnect_timeout=timedelta(seconds=0),
     ):
         if worker_manager_id is None:
             worker_manager_id = str(uuid.uuid4())
@@ -182,6 +183,7 @@ class WorkerManager:
         self._log_forwarder: Optional[ForwardHandler] = None
         self.stop_request = asyncio.Event()
         self.parent = parent
+        self.reconnect_timeout = reconnect_timeout
 
     @property
     def id(self):
@@ -198,13 +200,23 @@ class WorkerManager:
             log.warning("Couldn't determine local username", exc_info=True)
             username = "<unknown>"
 
-        exe = sys.modules["__main__"].__file__
+        try:
+            exe = sys.modules["__main__"].__file__
+        except AttributeError:
+            # In the case that python has been started with a script passed by
+            # "-c" or is in interactive mode __main__ won't have a file member.
+            # One of the cases that triggers that is poetry launching a
+            # configured script from the current project (and possibly develop
+            # dependencies). In that case poetry sets argv[0] appropriately.
+            # other wise this is better than nothing (often not by much)
+            exe = sys.argv[0]
 
         await self._send({
             "action": "hello",
             "manager_id": self._id,
             "manager_description": self._description,
             "repo_root": self._repo_root,
+            "reconnect_timeout_seconds": self.reconnect_timeout.total_seconds(),
             "metadata": {
                 "pid": os.getpid(),
                 "hostname": socket.getfqdn(),
@@ -234,6 +246,7 @@ class WorkerManager:
 
     async def process_master_msgs(self):
         tasks = BackgroundTasks()
+        initiate_close = False
         try:
             while True:
                 line = await tasks.run_foreground(self._reader.readline())
@@ -242,9 +255,17 @@ class WorkerManager:
                     break
                 tasks.add_background(self._handle_msg(line))
         except asyncio.CancelledError:
-            pass
+            log.info(f"Worker manager stopping")
+            initiate_close = True
+        except ConnectionError as ex:
+            log.info(f"Worker manager closing connection error: {ex}")
+            raise
+        except Exception as ex:
+            log.info(f"Worker manager closing internal error: {ex}")
+            initiate_close = True
+            raise
         finally:
-            await self._clean_up()
+            await self._clean_up(initiate_close)
             tasks = [
                 task
                 for task in tasks.take_tasks()
@@ -412,7 +433,7 @@ class WorkerManager:
         if worker.stderr_task in pending:
             log.warning("Stderr task didn't exit")
 
-    async def _clean_up(self):
+    async def _clean_up(self, initiate_close):
         log.info("Closing worker manager")
         if self._log_forwarder:
             await self._log_forwarder.stop()
@@ -426,6 +447,8 @@ class WorkerManager:
             ])
 
         try:
+            if initiate_close:
+                await shutdown_and_drain(self._reader, self._writer)
             self._writer.close()
             await self._writer.wait_closed()
         except ConnectionError:
