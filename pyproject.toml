@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "artiq"
-version = "7.0"
+version = "7.991234"
 description = "Advanced Real-Time Infrastructure for Quantum physics"
 authors = ["M-Labs"]
 license = "GPL v3"
