@@ -7,6 +7,7 @@ process via IPC.
 """
 import argparse
 import base64
+from contextlib import ExitStack
 import io
 import sys
 from tempfile import SpooledTemporaryFile
@@ -378,6 +379,7 @@ def main(argv=None):
     exp = None
     exp_inst = None
     repository_path = None
+    first = True
 
     def write_results():
         with SpooledTemporaryFile(max_size=20 * 1024 * 1024) as tmpf:
@@ -407,16 +409,20 @@ def main(argv=None):
         import_cache.install_hook()
 
     try:
-        device_mgr.get("tracing").start("artiq-worker")
-    except DeviceError:
-        pass
-
-    tracer = trace.get_tracer("worker")
-    try:
-        with tracer.start_as_current_span("worker") as worker:
-            logger.info(f"Starting trace with id: {worker.get_span_context().trace_id}")
+        with ExitStack() as stack:
             while True:
                 obj = get_object()
+
+                if first:
+                    first = False
+                    try:
+                        device_mgr.get("tracing").start("artiq-worker")
+                    except DeviceError:
+                        logger.debug("Couldn't start tracing", exc_info=True)
+                    tracer = trace.get_tracer("worker")
+                    worker = stack.enter_context(tracer.start_as_current_span("worker"))
+                    logger.info(f"Starting trace with id: {worker.get_span_context().trace_id}")
+
                 action = obj["action"]
                 if action == "build":
                     with tracer.start_as_current_span("build"):
@@ -435,8 +441,9 @@ def main(argv=None):
                             "type": "experiment",
                             "rid": rid,
                             "experiment_file": experiment_file,
-                            "experiment_class": expid["class_name"],
                         })
+                        if expid["class_name"] is not None:
+                            worker.set_attribute("class_name", expid["class_name"])
                         setup_diagnostics(experiment_file, repository_path)
                         exp = get_experiment(experiment_file, expid["class_name"])
                         device_mgr.virtual_devices["scheduler"].set_run_info(
@@ -487,6 +494,7 @@ def main(argv=None):
                 elif action == "terminate":
                     break
     except:
+        logger.exception("arg")
         put_exception_report()
     finally:
         device_mgr.close_devices()
