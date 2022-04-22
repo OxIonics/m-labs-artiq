@@ -35,7 +35,7 @@ class _Model(DictSyncSimpleTableModel):
     def sort_key(self, k, v):
         return (
             v["id"] != self.local_worker_manager.id,
-            not v["connected"],
+            not v.get("connected", True),
             v["description"],
             v.get("repo_root"),
             v.get("metadata", {}).get("pid"),

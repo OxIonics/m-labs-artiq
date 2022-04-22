@@ -26,7 +26,7 @@ def make_exp_source(expid, repo_msg, worker_managers=None):
 
 
 def make_connection_string(worker_manager):
-    if worker_manager["connected"]:
-        return f"Connected since: {worker_manager['connection_time']}"
+    if worker_manager.get("connected", True):
+        return f"Connected since: {worker_manager.get('connection_time', 'unset')}"
     else:
         return f"Disconnected since: {worker_manager['disconnection_time']}"
