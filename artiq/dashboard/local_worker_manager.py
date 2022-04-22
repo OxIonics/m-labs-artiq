@@ -15,10 +15,17 @@ log = logging.getLogger(__name__)
 
 
 class LocalWorkerManagerStatus(Enum):
+    # initial is used whilst we're waiting for a call to start or the
+    # initial set of data from the subscriber
     initial = 0
+    # Triggered the start of the local worker manager, but it's not happened yet
     starting = 1
+    # Local worker manager running and started by this
     running = 2
+    # The local worker manager failed and could be restarted
     failed = 3
+    # There's another worker manager using our ID, starting a worker manager
+    # here is expected to immediately fail.
     conflict = 4
 
 
