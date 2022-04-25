@@ -59,3 +59,13 @@ async def wait_for(check, *args, timeout=1, period=0.01, exc=(AssertionError,)):
 def assert_num_connection(worker_manager_db: WorkerManagerDB, num=1):
     assert len(worker_manager_db._worker_managers) >= num
 
+
+def dummy_get_device(key, resolve_alias=False):
+    raise KeyError(key)
+
+
+DUMMY_WORKER_HANDLERS = {
+    "get_device": dummy_get_device,
+    "store_results": lambda t, f, d: None,
+}
+

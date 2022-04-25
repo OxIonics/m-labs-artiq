@@ -7,6 +7,7 @@ process via IPC.
 """
 import argparse
 import base64
+from contextlib import ExitStack
 import io
 import sys
 from tempfile import SpooledTemporaryFile
@@ -18,7 +19,7 @@ import traceback
 from collections import OrderedDict
 
 import h5py
-
+from opentelemetry import trace
 from sipyco import pipe_ipc, pyon
 from sipyco.packed_exceptions import raise_packed_exc
 from sipyco.logging_tools import multiline_log_config
@@ -26,7 +27,7 @@ import zlib
 
 import artiq
 from artiq import tools
-from artiq.master.worker_db import DeviceManager, DatasetManager, DummyDevice
+from artiq.master.worker_db import DeviceError, DeviceManager, DatasetManager, DummyDevice
 from artiq.language.environment import (
     is_public_experiment, TraceArgumentManager, ProcessArgumentManager
 )
@@ -70,19 +71,23 @@ def put_object(obj):
 def make_parent_action(action):
     def parent_action(*args, **kwargs):
         global skip_next_status
-        request = {"action": action, "args": args, "kwargs": kwargs}
-        put_object(request)
-        reply = get_object()
-        if "action" in reply:
-            if reply["action"] == "terminate":
-                skip_next_status = True
-                sys.exit()
+        with trace.get_tracer(__name__).start_as_current_span(
+                "parent_action",
+                attributes={"action": action},
+        ):
+            request = {"action": action, "args": args, "kwargs": kwargs}
+            put_object(request)
+            reply = get_object()
+            if "action" in reply:
+                if reply["action"] == "terminate":
+                    skip_next_status = True
+                    sys.exit()
+                else:
+                    raise ValueError
+            if reply["status"] == "ok":
+                return reply["data"]
             else:
-                raise ValueError
-        if reply["status"] == "ok":
-            return reply["data"]
-        else:
-            raise_packed_exc(reply["exception"])
+                raise_packed_exc(reply["exception"])
     return parent_action
 
 
@@ -378,9 +383,13 @@ def main(argv=None):
     exp = None
     exp_inst = None
     repository_path = None
+    first = True
 
     def write_results():
-        with SpooledTemporaryFile(max_size=20 * 1024 * 1024) as tmpf:
+        with \
+                tracer.start_as_current_span("write_results"), \
+                SpooledTemporaryFile(max_size=20 * 1024 * 1024) as tmpf:
+
             filename = "{:09}-{}.h5".format(rid, exp.__name__)
             with h5py.File(filename, "w", driver="fileobj", fileobj=tmpf) as f:
                 dataset_mgr.write_hdf5(f)
@@ -407,68 +416,92 @@ def main(argv=None):
         import_cache.install_hook()
 
     try:
-        while True:
-            obj = get_object()
-            action = obj["action"]
-            if action == "build":
-                logger.info("Starting build")
-                start_time = time.time()
-                rid = obj["rid"]
-                expid = obj["expid"]
-                if obj["wd"] is not None:
-                    # Using repository
-                    experiment_file = os.path.join(obj["wd"], expid["file"])
-                    repository_path = obj["wd"]
-                else:
-                    experiment_file = expid["file"]
-                    repository_path = None
-                setup_diagnostics(experiment_file, repository_path)
-                exp = get_experiment(experiment_file, expid["class_name"])
-                device_mgr.virtual_devices["scheduler"].set_run_info(
-                    rid, obj["pipeline_name"], expid, obj["priority"])
-                start_local_time = time.localtime(start_time)
-                dirname = os.path.join("results",
-                                   time.strftime("%Y-%m-%d", start_local_time),
-                                   time.strftime("%H", start_local_time))
-                os.makedirs(dirname, exist_ok=True)
-                os.chdir(dirname)
-                argument_mgr = ProcessArgumentManager(expid["arguments"])
-                exp_inst = exp((device_mgr, dataset_mgr, argument_mgr, {}))
-                logger.info("Completed build")
-                put_completed()
-            elif action == "prepare":
-                logger.info("Starting prepare")
-                exp_inst.prepare()
-                logger.info("Completed prepare")
-                put_completed()
-            elif action == "run":
-                logger.info("Starting run")
-                run_time = time.time()
-                try:
-                    exp_inst.run()
-                except:
-                    # Only write results in run() on failure; on success wait
-                    # for end of analyze stage.
-                    write_results()
-                    raise
-                logger.info("Completed run")
-                put_completed()
-            elif action == "analyze":
-                logger.info("Starting analyze")
-                try:
-                    exp_inst.analyze()
-                finally:
-                    write_results()
-                logger.info("Completed analyze")
-                put_completed()
-            elif action == "examine":
-                # No logging for examine it's not part of the main worker life
-                # cycle and I think it would get a bit chatty
-                examine(ExamineDeviceMgr, ExamineDatasetMgr, obj["file"])
-                put_completed()
-            elif action == "terminate":
-                break
+        with ExitStack() as stack:
+            while True:
+                obj = get_object()
+
+                if first:
+                    first = False
+                    try:
+                        device_mgr.get("tracing").start("artiq-worker")
+                    except DeviceError:
+                        logger.debug("Couldn't start tracing", exc_info=True)
+                    tracer = trace.get_tracer("worker")
+                    worker = stack.enter_context(tracer.start_as_current_span("worker"))
+                    logger.info(f"Starting trace with id: {worker.get_span_context().trace_id}")
+
+                action = obj["action"]
+                if action == "build":
+                    with tracer.start_as_current_span("build"):
+                        logger.info("Starting build")
+                        start_time = time.time()
+                        rid = obj["rid"]
+                        expid = obj["expid"]
+                        if obj["wd"] is not None:
+                            # Using repository
+                            experiment_file = os.path.join(obj["wd"], expid["file"])
+                            repository_path = obj["wd"]
+                        else:
+                            experiment_file = expid["file"]
+                            repository_path = None
+                        worker.set_attributes({
+                            "type": "experiment",
+                            "rid": rid,
+                            "experiment_file": experiment_file,
+                        })
+                        if expid["class_name"] is not None:
+                            worker.set_attribute("class_name", expid["class_name"])
+                        setup_diagnostics(experiment_file, repository_path)
+                        exp = get_experiment(experiment_file, expid["class_name"])
+                        device_mgr.virtual_devices["scheduler"].set_run_info(
+                            rid, obj["pipeline_name"], expid, obj["priority"])
+                        start_local_time = time.localtime(start_time)
+                        dirname = os.path.join("results",
+                                           time.strftime("%Y-%m-%d", start_local_time),
+                                           time.strftime("%H", start_local_time))
+                        os.makedirs(dirname, exist_ok=True)
+                        os.chdir(dirname)
+                        argument_mgr = ProcessArgumentManager(expid["arguments"])
+                        exp_inst = exp((device_mgr, dataset_mgr, argument_mgr, {}))
+                        logger.info("Completed build")
+                        put_completed()
+                elif action == "prepare":
+                    with tracer.start_as_current_span("prepare"):
+                        logger.info("Starting prepare")
+                        exp_inst.prepare()
+                        logger.info("Completed prepare")
+                        put_completed()
+                elif action == "run":
+                    with tracer.start_as_current_span("run"):
+                        logger.info("Starting run")
+                        run_time = time.time()
+                        try:
+                            exp_inst.run()
+                        except:
+                            # Only write results in run() on failure; on success wait
+                            # for end of analyze stage.
+                            write_results()
+                            raise
+                        logger.info("Completed run")
+                        put_completed()
+                elif action == "analyze":
+                    with tracer.start_as_current_span("analyze"):
+                        logger.info("Starting analyze")
+                        try:
+                            exp_inst.analyze()
+                        finally:
+                            write_results()
+                        logger.info("Completed analyze")
+                        put_completed()
+                elif action == "examine":
+                    # No logging for examine it's not part of the main worker life
+                    # cycle and I think it would get a bit chatty
+                    examine(ExamineDeviceMgr, ExamineDatasetMgr, obj["file"])
+                    put_completed()
+                elif action == "terminate":
+                    break
     except:
+        logger.exception("arg")
         put_exception_report()
     finally:
         device_mgr.close_devices()

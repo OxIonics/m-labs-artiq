@@ -7,6 +7,7 @@ from time import time, sleep
 from artiq.experiment import *
 from artiq.master.scheduler import Scheduler
 from artiq.master.worker_transport import PipeWorkerTransport
+from artiq.test.helpers import DUMMY_WORKER_HANDLERS
 
 
 class DummyExperimentRepo:
@@ -145,9 +146,7 @@ class SchedulerCase(unittest.TestCase):
 
     def make_scheduler(self, handlers=None):
         if handlers is None:
-            handlers = {
-                "store_results": lambda t, f, d: None,
-            }
+            handlers = DUMMY_WORKER_HANDLERS
         return Scheduler(_RIDCounter(0), handlers, DummyExperimentDB(), None)
 
     def test_steps(self):
@@ -189,9 +188,7 @@ class SchedulerCase(unittest.TestCase):
     def test_pending_priority(self):
         """Check due dates take precedence over priorities when waiting to
         prepare."""
-        handlers = {
-            "store_results": lambda t, f, d: None,
-        }
+        handlers = DUMMY_WORKER_HANDLERS.copy()
         scheduler = self.make_scheduler(handlers)
         handlers["scheduler_check_pause"] = scheduler.check_pause
 
@@ -354,7 +351,7 @@ class SchedulerCase(unittest.TestCase):
                  "value": (False, True), "path": []})
             termination_ok = True
         handlers = {
-            "store_result": lambda t, f, d: None,
+            **DUMMY_WORKER_HANDLERS,
             "update_dataset": check_termination,
         }
         scheduler = self.make_scheduler(handlers)
@@ -530,9 +527,9 @@ class SchedulerCase(unittest.TestCase):
             flags.termination_ok = True
 
         handlers = {
+            **DUMMY_WORKER_HANDLERS,
             "get_dataset": get_dataset,
             "update_dataset": check_termination,
-            "store_results": lambda t, f, d: None,
         }
         scheduler = self.make_scheduler(handlers)
 

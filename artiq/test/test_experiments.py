@@ -10,7 +10,7 @@ from artiq.master import experiments
 from artiq.master.experiments import ExperimentDB
 from artiq.master.worker_managers import WorkerManagerDB
 from artiq.test.consts import BIND
-from artiq.test.helpers import assert_num_connection, wait_for
+from artiq.test.helpers import DUMMY_WORKER_HANDLERS, assert_num_connection, wait_for
 from artiq.test_tools.thread_worker_transport import ThreadWorkerTransport
 from artiq.worker_manager.worker_manager import WorkerManager
 
@@ -34,7 +34,11 @@ def _render_experiment(**kwargs):
 
 
 def _make_experiment_db(backend, worker_manager_db=None):
-    return experiments.ExperimentDB(backend, {}, worker_manager_db)
+    return experiments.ExperimentDB(
+        backend,
+        DUMMY_WORKER_HANDLERS,
+        worker_manager_db,
+    )
 
 
 @pytest.fixture()

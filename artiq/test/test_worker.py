@@ -6,6 +6,7 @@ from time import sleep
 
 from artiq.experiment import *
 from artiq.master.worker import *
+from artiq.test.helpers import DUMMY_WORKER_HANDLERS
 
 
 class SimpleExperiment(EnvExperiment):
@@ -70,9 +71,7 @@ def _run_experiment(class_name):
         "arguments": dict()
     }
     loop = asyncio.get_event_loop()
-    worker = Worker({
-        "store_results": lambda t, f, d: None
-    })
+    worker = Worker(DUMMY_WORKER_HANDLERS)
     loop.run_until_complete(_call_worker(worker, expid))
 
 
