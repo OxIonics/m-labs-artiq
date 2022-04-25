@@ -61,7 +61,7 @@ def capture_worker_logs(thread_name, level, queue: asyncio.Queue):
         root_logger.removeHandler(handler)
         for handler in root_logger.handlers:
             handler.removeFilter(ignoreWorkerLogs)
-        queue.put_nowait('')
+        queue.put_nowait(None)
 
 
 async def aempty() -> AsyncIterator[Any]:
