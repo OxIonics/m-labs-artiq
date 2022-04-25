@@ -128,7 +128,8 @@ class Core:
             nonlocal result
             result = new_result
 
-        with trace.get_tracer(__name__).start_as_current_span(
+        tracer = trace.get_tracer(__name__)
+        with tracer.start_as_current_span(
             "artiq-compile",
             attributes={"function": function.__name__},
         ):
@@ -139,9 +140,13 @@ class Core:
             self.comm.check_system_info()
             self.first_run = False
 
-        self.comm.load(kernel_library)
-        self.comm.run()
-        self.comm.serve(embedding_map, symbolizer, demangler)
+        with tracer.start_as_current_span(
+                "run-kernel",
+                attributes={"function": function.__name__},
+        ):
+            self.comm.load(kernel_library)
+            self.comm.run()
+            self.comm.serve(embedding_map, symbolizer, demangler)
 
         return result
 

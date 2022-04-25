@@ -71,19 +71,23 @@ def put_object(obj):
 def make_parent_action(action):
     def parent_action(*args, **kwargs):
         global skip_next_status
-        request = {"action": action, "args": args, "kwargs": kwargs}
-        put_object(request)
-        reply = get_object()
-        if "action" in reply:
-            if reply["action"] == "terminate":
-                skip_next_status = True
-                sys.exit()
+        with trace.get_tracer(__name__).start_as_current_span(
+                "parent_action",
+                attributes={"action": action},
+        ):
+            request = {"action": action, "args": args, "kwargs": kwargs}
+            put_object(request)
+            reply = get_object()
+            if "action" in reply:
+                if reply["action"] == "terminate":
+                    skip_next_status = True
+                    sys.exit()
+                else:
+                    raise ValueError
+            if reply["status"] == "ok":
+                return reply["data"]
             else:
-                raise ValueError
-        if reply["status"] == "ok":
-            return reply["data"]
-        else:
-            raise_packed_exc(reply["exception"])
+                raise_packed_exc(reply["exception"])
     return parent_action
 
 
@@ -382,7 +386,10 @@ def main(argv=None):
     first = True
 
     def write_results():
-        with SpooledTemporaryFile(max_size=20 * 1024 * 1024) as tmpf:
+        with \
+                tracer.start_as_current_span("write_results"), \
+                SpooledTemporaryFile(max_size=20 * 1024 * 1024) as tmpf:
+
             filename = "{:09}-{}.h5".format(rid, exp.__name__)
             with h5py.File(filename, "w", driver="fileobj", fileobj=tmpf) as f:
                 dataset_mgr.write_hdf5(f)
