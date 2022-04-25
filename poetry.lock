@@ -651,6 +651,19 @@ url = "http://pypi.oxionics.com:3141/oiuser/oxionics/+simple"
 reference = "oxionics"
 
 [[package]]
+name = "path-version"
+version = "0.1.0+ga929170"
+description = ""
+category = "dev"
+optional = false
+python-versions = ">=3.8,<3.9"
+
+[package.source]
+type = "legacy"
+url = "http://pypi.oxionics.com:3141/oiuser/oxionics/+simple"
+reference = "oxionics"
+
+[[package]]
 name = "pillow"
 version = "9.1.0"
 description = "Python Imaging Library (Fork)"
@@ -1541,7 +1554,7 @@ remote-flashing = ["paramiko"]
 [metadata]
 lock-version = "1.1"
 python-versions = "~3.8"
-content-hash = "64acfa0e7f671025c605dfe5d1eea88ffde4eae4ca9ddd6a27c2b4bd3c1a5f2a"
+content-hash = "92a5fe25d6589181fd3d268f6a174556496151be14ad799d17c6324e5a1da330"
 
 [metadata.files]
 alabaster = [
@@ -1861,6 +1874,9 @@ packaging = [
 paramiko = [
     {file = "paramiko-2.10.3-py2.py3-none-any.whl", hash = "sha256:ac6593479f2b47a9422eca076b22cff9f795495e6733a64723efc75dd8c92101"},
     {file = "paramiko-2.10.3.tar.gz", hash = "sha256:ddb1977853aef82804b35d72a0e597b244fa326c404c350bd00c5b01dbfee71a"},
+]
+path-version = [
+    {file = "path_version-0.1.0+ga929170-py3-none-any.whl", hash = "sha256:c00eb5c348f9ad01f35b948a0313405d533f8a5524d1f0f825d0a250e1ad386c"},
 ]
 pillow = [
     {file = "Pillow-9.1.0-cp310-cp310-macosx_10_9_x86_64.whl", hash = "sha256:af79d3fde1fc2e33561166d62e3b63f0cc3e47b5a3a2e5fea40d4917754734ea"},

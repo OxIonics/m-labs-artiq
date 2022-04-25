@@ -14,3 +14,5 @@ jobs:
       PYPI_SERVER: ${{ secrets.PYPI_SERVER }}
       PYPI_LOGIN: ${{ secrets.PYPI_LOGIN }}
       PYPI_PASSWORD: ${{ secrets.PYPI_PASSWORD }}
+    with:
+      EXTRA_POETRY_PIP_ARGS: --extra-index-url http://pypi.oxionics.com:3141/oiuser/oxionics/+simple/ --trusted-host pypi.oxionics.com "path_version~=0.1"

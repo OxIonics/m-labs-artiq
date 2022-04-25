@@ -14,8 +14,8 @@ def get_version():
 
     try:
         import poetry_dynamic_versioning
-    except ImportError:
-        return _DUMMY_VERSION
+        __version__ = poetry_dynamic_versioning._get_version(poetry_dynamic_versioning.get_config(__file__))
+    except Exception:
+        pass
 
-    __version__ = poetry_dynamic_versioning._get_version(poetry_dynamic_versioning.get_config(__file__))
     return __version__
