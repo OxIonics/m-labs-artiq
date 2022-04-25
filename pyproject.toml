@@ -72,6 +72,13 @@ lit = "^14.0.0"
 outputcheck = "^0.4.1"
 flake8 = "^4.0.1"
 pyqt5-stubs = "^5.15.2"
+
+# This actually doesn't work the way that I wanted these aren't included whan you have
+# a develop dependency. So actually the repos that we build firmware/run the dashboard
+# want to have these as dev dependencies if they have a git or path dependency on this
+# repository. Which is pretty hard to capture apart from going through them all and
+# adding dev dependencies for these things.
+#
 # poetry-dynamic-versioning is installed so that we can generate dev version numbers
 # when versioning the published wheels it needs to be installed in poetry's virtualenv
 poetry-dynamic-versioning = "^0.14.1"
