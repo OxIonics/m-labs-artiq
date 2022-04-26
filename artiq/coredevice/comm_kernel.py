@@ -1,3 +1,4 @@
+import re
 import struct
 import logging
 import traceback
@@ -13,6 +14,7 @@ from artiq import __version__ as software_version
 
 
 logger = logging.getLogger(__name__)
+version_re = re.compile(r"^\d+\.\d+\+g[\da-z]+\.fw(?P<fw>[\da-z]+)(?P<dirty>\.dirty)+?")
 
 
 class Request(Enum):
@@ -347,13 +349,30 @@ class CommKernel:
         runtime_id = self._read(4)
         if runtime_id == b"AROR":
             gateware_version = self._read_string().split(";")[0]
-            if gateware_version != software_version and not self.warned_of_mismatch:
-                logger.warning("Mismatch between gateware (%s) "
-                               "and software (%s) versions",
-                               gateware_version, software_version)
+            finished_cleanly = self._read_bool()
+
+            if not CommKernel.warned_of_mismatch:
+                gateware_match = version_re.match(gateware_version)
+                software_match = version_re.match(software_version)
+                if software_match and gateware_match:
+                    gateware_hash = gateware_match.group("fw")
+                    software_hash = software_match.group("fw")
+                    if software_hash != gateware_hash:
+                        # For some reason the firmware doesn't report it's own
+                        # version, but that of the gateware. Let's assume that the
+                        # gateware and the firmware have been built and flashed at
+                        # the same time
+                        logger.warning(
+                            "Mismatch between firmware hashes. "
+                            f"Hash in gateware: {gateware_hash}. "
+                            f"Hash in local software: {software_hash}."
+                        )
+                elif gateware_version != software_version:
+                    logger.warning("Mismatch between gateware (%s) "
+                                   "and software (%s) versions",
+                                   gateware_version, software_version)
                 CommKernel.warned_of_mismatch = True
 
-            finished_cleanly = self._read_bool()
             if not finished_cleanly:
                 logger.warning("Previous kernel did not cleanly finish")
         elif runtime_id == b"ARZQ":
