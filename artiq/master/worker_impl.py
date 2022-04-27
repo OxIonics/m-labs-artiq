@@ -433,7 +433,7 @@ def main(argv=None):
                 action = obj["action"]
                 if action == "build":
                     with tracer.start_as_current_span("build"):
-                        logger.info("Starting build")
+                        logger.debug("Starting build")
                         start_time = time.time()
                         rid = obj["rid"]
                         expid = obj["expid"]
@@ -463,17 +463,17 @@ def main(argv=None):
                         os.chdir(dirname)
                         argument_mgr = ProcessArgumentManager(expid["arguments"])
                         exp_inst = exp((device_mgr, dataset_mgr, argument_mgr, {}))
-                        logger.info("Completed build")
+                        logger.debug("Completed build")
                         put_completed()
                 elif action == "prepare":
                     with tracer.start_as_current_span("prepare"):
-                        logger.info("Starting prepare")
+                        logger.debug("Starting prepare")
                         exp_inst.prepare()
-                        logger.info("Completed prepare")
+                        logger.debug("Completed prepare")
                         put_completed()
                 elif action == "run":
                     with tracer.start_as_current_span("run"):
-                        logger.info("Starting run")
+                        logger.debug("Starting run")
                         run_time = time.time()
                         try:
                             exp_inst.run()
@@ -482,16 +482,16 @@ def main(argv=None):
                             # for end of analyze stage.
                             write_results()
                             raise
-                        logger.info("Completed run")
+                        logger.debug("Completed run")
                         put_completed()
                 elif action == "analyze":
                     with tracer.start_as_current_span("analyze"):
-                        logger.info("Starting analyze")
+                        logger.debug("Starting analyze")
                         try:
                             exp_inst.analyze()
                         finally:
                             write_results()
-                        logger.info("Completed analyze")
+                        logger.debug("Completed analyze")
                         put_completed()
                 elif action == "examine":
                     # No logging for examine it's not part of the main worker life
@@ -501,7 +501,6 @@ def main(argv=None):
                 elif action == "terminate":
                     break
     except:
-        logger.exception("arg")
         put_exception_report()
     finally:
         device_mgr.close_devices()

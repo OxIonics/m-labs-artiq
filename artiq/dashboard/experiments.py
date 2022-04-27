@@ -646,7 +646,7 @@ class ExperimentManager:
         self.explist = model.backing_store
 
     def _explist_update(self, mod):
-        logger.info(f"Explist {summarise_mod(mod)}")
+        logger.debug(f"Explist {summarise_mod(mod)}")
 
         # This is pretty indiscriminate. In theory, we should be able to target
         # the load of only the experiments that have just been added to
@@ -662,7 +662,7 @@ class ExperimentManager:
         # This is necessary so that any files (i.e. outside repo experiments)
         # can have an opportunity to load after the worker manager.
 
-        logger.info(f"Wkr-mgr {summarise_mod(mod)}")
+        logger.debug(f"Wkr-mgr {summarise_mod(mod)}")
 
         # This is pretty indiscriminate. See explist_update
         if mod["action"] in ["init", "setitem"]:
