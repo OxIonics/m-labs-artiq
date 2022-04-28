@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "artiq"
-version = "7.991234"
+version = "7.0"
 description = "Advanced Real-Time Infrastructure for Quantum physics"
 authors = ["M-Labs"]
 license = "GPL v3"
@@ -73,14 +73,32 @@ outputcheck = "^0.4.1"
 flake8 = "^4.0.1"
 pyqt5-stubs = "^5.15.2"
 
+# As these are dev dependencies of artiq, projects that depend on artiq
+# won't depend on these transitively. So any project that depends on artiq
+# as a path or git dependency will not be able to use this dynamic version,
+# unless that project also depends on poetry-dynamic-versioning. So we do not aim
+# to support this dynamic versioning in this circumstance.
+#
+# poetry-dynamic-versioning is installed so that we can generate dev version numbers
+# when versioning the published wheels it needs to be installed in poetry's virtualenv
+poetry-dynamic-versioning = "^0.14.1"
+# comment about poetry-dynamic-versioning applies to path_version too
+path_version = "^0.1"
+
 [tool.poetry-dynamic-versioning]
 enable = true
 vcs = "git"
 style = "pep440"
 # number of commits since the root commit. 7579 is the number of commits before
 # the 7.0 tag -- this brings us in line with artiq.
-format-jinja = "{{ base.split('.')[0] }}.{{ distance + 7579 }}+g{{ commit }}"
+format-jinja = "{{ base.split('.')[0] }}.{{ distance + 7579 }}+g{{ commit }}.fw{{ get_last_change_hash('artiq/firmware') }}{%if dirty %}.dirty{% endif %}"
 pattern = "^(?P<base>\\d+(\\.\\d+)*)"
+format-jinja-imports = [
+    { module = "path_version", item = "get_last_change_hash" },
+]
+
+[tool.poetry-dynamic-versioning.substitution]
+patterns = ["(^__version__\\s*(?::.*?)?=\\sf?['\"])[^'\"]*(['\"])"]
 
 [build-system]
 requires = ["poetry-core>=1.0.0", "poetry-dynamic-versioning"]
