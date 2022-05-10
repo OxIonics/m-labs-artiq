@@ -400,7 +400,7 @@ def main(argv=None):
                 f["expid"] = pyon.encode(expid)
 
             tmpf.seek(0, io.SEEK_END)
-            logger.info(f"Sending results total size {tmpf.tell()}B")
+            logger.debug(f"Sending results total size {tmpf.tell()}B")
 
             tmpf.seek(0)
 
