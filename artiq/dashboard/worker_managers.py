@@ -1,3 +1,4 @@
+import asyncio
 import logging
 
 from PyQt5 import QtCore, QtWidgets
@@ -9,6 +10,7 @@ from artiq.gui.models import (
     ModelSubscriber,
     ReplicantModelManager,
 )
+from sipyco.pc_rpc import AsyncioClient
 
 log = logging.getLogger(__name__)
 
@@ -62,28 +64,39 @@ class _Model(DictSyncSimpleTableModel):
 class WorkerManagerDock(QtWidgets.QDockWidget):
 
     @staticmethod
-    def _init_table():
+    def _init_table(disconnect):
         table = QtWidgets.QTableView()
         table.setSelectionBehavior(QtWidgets.QAbstractItemView.SelectRows)
         table.setSelectionMode(QtWidgets.QAbstractItemView.SingleSelection)
         table.verticalHeader().setSectionResizeMode(
             QtWidgets.QHeaderView.ResizeToContents)
         table.verticalHeader().hide()
+        table.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
+
+        request_disconnect_action = QtWidgets.QAction("Request disconnect", table)
+        request_disconnect_action.triggered.connect(disconnect)
+        request_disconnect_action.setShortcut("DELETE")
+        request_disconnect_action.setShortcutContext(QtCore.Qt.WidgetShortcut)
+        table.addAction(request_disconnect_action)
         return table
 
     def __init__(
             self,
             worker_manager_sub: ModelSubscriber,
-            local_worker_manager: LocalWorkerManager
+            local_worker_manager: LocalWorkerManager,
+            worker_managers_rpc: AsyncioClient,
     ):
         QtWidgets.QDockWidget.__init__(self, "WorkerManagers")
+        self.worker_managers_rpc = worker_managers_rpc
         self.setObjectName("WorkerManagers")
         self.setFeatures(
             QtWidgets.QDockWidget.DockWidgetMovable |
             QtWidgets.QDockWidget.DockWidgetFloatable
         )
 
-        self.table = self._init_table()
+        self.table = self._init_table(
+            self._disconnect
+        )
         self.setWidget(self.table)
 
         self.model = _Model(local_worker_manager, {})
@@ -102,3 +115,13 @@ class WorkerManagerDock(QtWidgets.QDockWidget):
 
     def restore_state(self, state):
         self.table.horizontalHeader().restoreState(QtCore.QByteArray(state))
+
+    def _disconnect(self):
+        idx = self.table.selectedIndexes()
+        if idx:
+            row = idx[0].row()
+            worker_manager_id = self.model.row_to_key[row]
+            log.debug(f"Disconnect worker manager: {worker_manager_id}")
+            asyncio.ensure_future(
+                self.worker_managers_rpc.disconnect(worker_manager_id)
+            )

@@ -1,8 +1,11 @@
+import asyncio
 import pprint
 import socket
 from textwrap import dedent
 
 from PyQt5 import QtCore, QtGui, QtWidgets, Qt
+
+from sipyco.pc_rpc import AsyncioClient
 from sipyco.sync_struct import Notifier
 
 from artiq.dashboard.local_worker_manager import LocalWorkerManager, LocalWorkerManagerStatus
@@ -49,8 +52,10 @@ class ConnectionStatuses:
             main_window: QtWidgets.QMainWindow,
             moninj_notifier: Notifier,
             local_worker_manager: LocalWorkerManager,
+            worker_managers_rpc: AsyncioClient,
             ):
 
+        self.worker_managers_rpc = worker_managers_rpc
         self.main_window = main_window
         self.master_conn = Status("Master conn")
         self.moninj = Status("moninj (kasli)")
@@ -129,7 +134,9 @@ class ConnectionStatuses:
                 "worker manager.\n"
                 "\n"
                 "To start a worker manager with this dashboard you'll have to "
-                "stop the other worker manager."
+                "stop the other worker manager. You can click disconnect to "
+                "disconnect the other worker manager, but it might be running "
+                "an experiment"
                 "\n\n"
             )
 
@@ -164,4 +171,15 @@ class ConnectionStatuses:
             msgBox = QtWidgets.QMessageBox(self.main_window)
             msgBox.setText(msg)
             msgBox.setDetailedText(pprint.pformat(conflict))
+            disconnect = msgBox.addButton(
+                "Disconnect",
+                QtWidgets.QMessageBox.ActionRole,
+            )
+            msgBox.setStandardButtons(QtWidgets.QMessageBox.Close)
+            msgBox.setDefaultButton(QtWidgets.QMessageBox.Close)
             msgBox.exec()
+
+            if msgBox.clickedButton() == disconnect:
+                asyncio.ensure_future(
+                    self.worker_managers_rpc.disconnect(self.local_worker_manager.id)
+                )

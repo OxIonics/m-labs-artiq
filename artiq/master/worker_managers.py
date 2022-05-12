@@ -158,6 +158,12 @@ class WorkerManagerDB:
         else:
             if existing_proxy:
                 existing_proxy.reconnect(hello, reader, writer)
+                log.info(
+                    f"Worker manager re-connected id={manager_id} "
+                    f"description={existing_proxy.description} "
+                    f"repo_root={existing_proxy.repo_root} "
+                    f"metadata={existing_proxy.metadata}"
+                )
                 self._update_connection_state(manager_id)
             else:
                 self._create_worker_manager(manager_id, hello, reader, writer)
@@ -531,3 +537,12 @@ class ManagedWorkerTransport(WorkerTransport):
 
     def description(self):
         return self._proxy.description
+
+
+class WorkerManagerControl:
+
+    def __init__(self, db: WorkerManagerDB):
+        self.db = db
+
+    async def disconnect(self, worker_manager_id):
+        await self.db.get_proxy(worker_manager_id).close()
