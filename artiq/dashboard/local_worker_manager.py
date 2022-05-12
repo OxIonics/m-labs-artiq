@@ -10,6 +10,7 @@ import uuid
 from sipyco.asyncio_tools import atexit_register_coroutine
 
 from artiq.gui.models import ModelSubscriber
+from artiq.tools import summarise_mod
 
 log = logging.getLogger(__name__)
 
@@ -60,12 +61,15 @@ class LocalWorkerManager:
         self._id = state["id"]
 
     def _set_worker_managers(self, model):
+        log.debug(f"Wkr-mgr: set model model.len: {len(model)}")
         self._worker_managers = model
         if self.status == LocalWorkerManagerStatus.initial and self._task is not None:
             self._check_conflict()
 
     def _worker_managers_changed(self, mod):
-        self._check_conflict()
+        log.debug(f"Wkr-mgr: {summarise_mod(mod)} model.len: {len(self._worker_managers)}")
+        if self._task is not None:
+            self._check_conflict()
 
     def _check_conflict(self):
         conflict = self._worker_managers.get(self._id)
