@@ -21,7 +21,7 @@ from artiq.master.scheduler import Scheduler
 from artiq.master.rid_counter import RIDCounter
 from artiq.master.experiments import (FilesystemBackend, GitBackend,
                                       ExperimentDB)
-from artiq.master.worker_managers import WorkerManagerDB
+from artiq.master.worker_managers import WorkerManagerControl, WorkerManagerDB
 
 logger = logging.getLogger(__name__)
 
@@ -157,7 +157,8 @@ def main():
         "master_device_db": device_db,
         "master_dataset_db": dataset_db,
         "master_schedule": scheduler,
-        "master_experiment_db": experiment_db
+        "master_experiment_db": experiment_db,
+        "master_worker_managers": WorkerManagerControl(worker_manager_db),
     }, allow_parallel=True)
     loop.run_until_complete(server_control.start(
         bind, args.port_control))

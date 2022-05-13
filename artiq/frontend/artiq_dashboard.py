@@ -145,7 +145,7 @@ def main():
 
     # create connections to master
     rpc_clients = dict()
-    for target in "schedule", "experiment_db", "dataset_db", "device_db":
+    for target in "schedule", "experiment_db", "dataset_db", "device_db", "worker_managers":
         client = AsyncioClient()
         loop.run_until_complete(client.connect_rpc(
             args.server, args.port_control, "master_" + target))
@@ -252,6 +252,7 @@ def main():
     d_worker_managers = worker_managers.WorkerManagerDock(
         sub_clients["worker_managers"],
         local_worker_manager,
+        rpc_clients["worker_managers"],
     )
     smgr.register(d_worker_managers)
 
@@ -264,6 +265,7 @@ def main():
         main_window,
         d_ttl_dds.notifier,
         local_worker_manager,
+        rpc_clients["worker_managers"],
     )
 
     # lay out docks

@@ -196,6 +196,14 @@ def get_argparser():
         help="Scan the repo associated with a worker manager",
     )
 
+    parser_disconnect_wkr_mgr = subparsers.add_parser(
+        "disconnect-wkr-mgr",
+        help="Have the master close it's connection to the specified worker "
+             "manager"
+    )
+    parser_disconnect_wkr_mgr.set_defaults(func=_action_disconnect_worker_manager)
+    parser_disconnect_wkr_mgr.add_argument("worker_mgr_id")
+
     common_args.verbosity_args(parser)
     return parser
 
@@ -399,6 +407,11 @@ def _action_ls(args):
         contents = remote.list_directory(args.directory, args.worker_mgr_id)
         for name in sorted(contents, key=lambda x: (x[-1] not in "\\/", x)):
             print(name)
+
+
+def _action_disconnect_worker_manager(args):
+    with _rpc_client(args, "master_worker_managers") as remote:
+        remote.disconnect(args.worker_mgr_id)
 
 
 def _action_show(args):
