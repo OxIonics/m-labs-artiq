@@ -513,7 +513,7 @@ reference = "oxionics"
 
 [[package]]
 name = "migen"
-version = "0.9.2.106+gd513565"
+version = "0.9.2.108+g4e8bcba"
 description = "A Python toolbox for building complex digital hardware"
 category = "main"
 optional = true
@@ -532,7 +532,7 @@ reference = "oxionics"
 
 [[package]]
 name = "misoc"
-version = "0.12.201+g868082b3"
+version = "0.12.203+gdf53a173"
 description = "A high performance and small footprint SoC based on Migen"
 category = "main"
 optional = true
@@ -635,7 +635,7 @@ reference = "oxionics"
 
 [[package]]
 name = "path-version"
-version = "0.1.0+ga929170"
+version = "0.1.2+g0715db8"
 description = ""
 category = "dev"
 optional = false
@@ -1834,10 +1834,10 @@ mccabe = [
     {file = "mccabe-0.6.1.tar.gz", hash = "sha256:dd8d182285a0fe56bace7f45b5e7d1a6ebcbf524e8f3bd87eb0f125271b8831f"},
 ]
 migen = [
-    {file = "migen-0.9.2.106+gd513565-py3-none-any.whl", hash = "sha256:3bedf0ae90527d011e22ee601ff1a605827cf4a3ff4225b4bd7677331e2d9c91"},
+    {file = "migen-0.9.2.108+g4e8bcba-py3-none-any.whl", hash = "sha256:9a608581d39178eb5917d341a73a118b00d98faed4c94176aed1384e72e4c5d8"},
 ]
 misoc = [
-    {file = "misoc-0.12.201+g868082b3-py3-none-any.whl", hash = "sha256:ceb3088a7d9c03f8273cd51acdf4433bd8d5d086f84101d346179919970b1af9"},
+    {file = "misoc-0.12.203+gdf53a173-py3-none-any.whl", hash = "sha256:5bc082ca4843f2f2bf23e50c3eca54d9b5481f3dc5eec4a188cbda867b90e3d6"},
 ]
 numpy = [
     {file = "numpy-1.22.4-cp310-cp310-macosx_10_14_x86_64.whl", hash = "sha256:ba9ead61dfb5d971d77b6c131a9dbee62294a932bf6a356e48c75ae684e635b3"},
@@ -1879,7 +1879,7 @@ paramiko = [
     {file = "paramiko-2.11.0.tar.gz", hash = "sha256:003e6bee7c034c21fbb051bf83dc0a9ee4106204dd3c53054c71452cc4ec3938"},
 ]
 path-version = [
-    {file = "path_version-0.1.0+ga929170-py3-none-any.whl", hash = "sha256:c00eb5c348f9ad01f35b948a0313405d533f8a5524d1f0f825d0a250e1ad386c"},
+    {file = "path_version-0.1.2+g0715db8-py3-none-any.whl", hash = "sha256:fd89c758733f9494798bc97c8fcec6b59d74fa37d74b033fe04eb694d827b010"},
 ]
 pillow = [
     {file = "Pillow-9.1.1-cp310-cp310-macosx_10_10_x86_64.whl", hash = "sha256:42dfefbef90eb67c10c45a73a9bc1599d4dac920f7dfcbf4ec6b80cb620757fe"},
