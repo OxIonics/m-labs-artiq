@@ -6,6 +6,7 @@ import asyncio
 import os
 from functools import partial
 from collections import OrderedDict
+import traceback
 from typing import Any, Dict, Optional
 import urllib.parse
 
@@ -806,7 +807,23 @@ class ExperimentManager:
                            "attempting to reset arguments", expurl,
                            exc_info=True)
             del self.submission_arguments[expurl]
-            dock = _ExperimentDock(self, expurl)
+            try:
+                dock = _ExperimentDock(self, expurl)
+            except:
+                logger.error(
+                    "Failed to create experiment dock for '%s' even after "
+                    "resetting arguments", expurl, exc_info=True,
+                )
+                msgBox = QtWidgets.QMessageBox(self.main_window)
+                msgBox.setText(
+                    f"Failed to create experiment dock for '{expurl}' even after "
+                    f"resetting the arguments. Maybe there's a bug in the "
+                    f"argument description."
+                )
+                msgBox.setDetailedText(traceback.format_exc())
+                msgBox.exec()
+                return
+
         self.open_experiments[expurl] = dock
         dock.setAttribute(QtCore.Qt.WA_DeleteOnClose)
         self.main_window.centralWidget().addSubWindow(dock)
