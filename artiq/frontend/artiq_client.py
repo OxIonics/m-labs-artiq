@@ -23,6 +23,7 @@ from dateutil.parser import parse as parse_date
 from prettytable import PrettyTable
 
 from artiq.display_tools import make_connection_string
+from sipyco.common_args import init_logger_from_args
 from sipyco.pc_rpc import AsyncioClient, Client
 from sipyco.sync_struct import Subscriber
 from sipyco.broadcast import Receiver
@@ -555,6 +556,7 @@ def _show_ccb(args):
 
 def main():
     args = get_argparser().parse_args()
+    init_logger_from_args(args)
     args.func(args)
 
 
