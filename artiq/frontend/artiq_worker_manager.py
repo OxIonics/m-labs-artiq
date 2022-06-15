@@ -54,6 +54,10 @@ def main():
              "Purely informational"
     )
     parser.add_argument(
+        "--repo",
+        help="Specify the directory containing the repository of experiments",
+    )
+    parser.add_argument(
         "description",
         help="The human readable description for the worker manager"
     )
@@ -92,6 +96,7 @@ def main():
             transport_factory=transport_factory,
             parent=args.parent,
             reconnect_timeout=reconnect_timeout,
+            repo_root=args.repo,
         )
     )
     try:
