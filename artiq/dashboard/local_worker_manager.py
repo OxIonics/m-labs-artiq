@@ -35,11 +35,13 @@ class LocalWorkerManager:
     def __init__(
             self,
             server: str,
+            repo: str,
             verbose: int,
             worker_managers_sub: ModelSubscriber,
     ):
         self._id = None
         self._server = server
+        self._repo = repo
         self._verbose = verbose
         self._process = None
         self._task = None
@@ -122,6 +124,7 @@ class LocalWorkerManager:
                         sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
                         "--id", self._id,
                         "--parent", f"artiq_dashboard:{os.getpid()}",
+                        "--repo", self._repo,
                         socket.gethostname(), self._server,
                     ]
                     if self._verbose:

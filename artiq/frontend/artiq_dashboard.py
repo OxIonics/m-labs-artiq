@@ -55,6 +55,10 @@ def get_argparser():
     parser.add_argument(
         "-p", "--load-plugin", dest="plugin_modules", action="append",
         help="Python module to load on startup")
+    parser.add_argument(
+        "--repo",
+        help="Specify the directory containing the repository of experiments",
+    )
     common_args.verbosity_args(parser)
     return parser
 
@@ -184,6 +188,7 @@ def main():
 
     local_worker_manager = LocalWorkerManager(
         args.server,
+        args.repo,
         args.verbose,
         sub_clients["worker_managers"],
     )
