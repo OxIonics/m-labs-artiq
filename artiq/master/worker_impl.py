@@ -494,10 +494,22 @@ def main(argv=None):
                         logger.debug("Completed analyze")
                         put_completed()
                 elif action == "examine":
-                    # No logging for examine it's not part of the main worker life
-                    # cycle and I think it would get a bit chatty
-                    examine(ExamineDeviceMgr, ExamineDatasetMgr, obj["file"])
-                    put_completed()
+                    worker.set_attributes(
+                        {
+                            "type": "examine",
+                            "rid": rid,
+                        }
+                    )
+                    with tracer.start_as_current_span(
+                            "examine",
+                            attributes={
+                                "file": obj["file"],
+                            }
+                    ):
+                        # No logging for examine it's not part of the main worker life
+                        # cycle and I think it would get a bit chatty
+                        examine(ExamineDeviceMgr, ExamineDatasetMgr, obj["file"])
+                        put_completed()
                 elif action == "terminate":
                     break
     except:
