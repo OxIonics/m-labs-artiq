@@ -124,9 +124,10 @@ class LocalWorkerManager:
                         sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
                         "--id", self._id,
                         "--parent", f"artiq_dashboard:{os.getpid()}",
-                        "--repo", self._repo,
                         socket.gethostname(), self._server,
                     ]
+                    if self._repo is not None:
+                        cmd.append(f"--repo={self._repo}")
                     if self._verbose:
                         cmd.append("-" + "v" * self._verbose)
 
