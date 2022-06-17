@@ -245,9 +245,20 @@ class ExamineDeviceMgr:
 
 
 class ExamineDatasetMgr:
+    # The worker processes used for examine are quite short lived so we can use
+    # a pretty dumb cache. This speeds up examines and scan where lots of
+    # experiments use the same datasets. Especially if we're in sandboxing mode
+    # and there's a ropey network hop.
+    _cache = {}
+
     @staticmethod
     def get(key, archive=False):
-        return ParentDatasetDB.get(key)
+        try:
+            return ExamineDatasetMgr._cache[key]
+        except KeyError:
+            val = ParentDatasetDB.get(key)
+            ExamineDatasetMgr._cache[key] = val
+            return val
 
     @staticmethod
     def update(self, mod):
