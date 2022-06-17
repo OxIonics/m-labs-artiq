@@ -769,6 +769,27 @@ class Stitcher:
         self.embedding_map = EmbeddingMap()
         self.value_map = defaultdict(lambda: [])
         self.definitely_changed = False
+        self._core_name = None
+
+    def _check_core(self, core_name):
+        """ Check whether `core_name` is the name of the core we're compiling for
+        """
+        # `Core` objects don't know their own name so we can't simply compare
+        # against the name passed unless we've found out the name first.
+        # If we don't yet know the name of the core we're compiling for we try
+        # and fetch the core from the device manager and compare the resulting
+        # object. If that succeeds we now know the name of the core we're
+        # compiling for and can cache that to speed up later uses.
+        # Seen as this check rarely fails and the device manager is probably a
+        # network hop away, this can achieve significant speedups.
+        if self._core_name is not None:
+            return self._core_name == core_name
+
+        if self.dmgr.get(core_name) == self.core:
+            self._core_name = core_name
+            return True
+        else:
+            return False
 
     def stitch_call(self, function, args, kwargs, callback=None):
         # We synthesize source code for the initial call so that
@@ -1194,7 +1215,7 @@ class Stitcher:
                 self.engine.process(diag)
 
             core_name = host_function.artiq_embedded.core_name
-            if core_name is not None and self.dmgr.get(core_name) != self.core:
+            if core_name is not None and not self._check_core(core_name):
                 note = diagnostic.Diagnostic("note",
                     "called from this function", {},
                     loc)
