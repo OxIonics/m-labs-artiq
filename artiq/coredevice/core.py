@@ -131,7 +131,10 @@ class Core:
         tracer = trace.get_tracer(__name__)
         with tracer.start_as_current_span(
             "artiq-compile",
-            attributes={"function": function.__name__},
+            attributes={
+                "function": function.__qualname__,
+                "function_module": function.__module__,
+            },
         ):
             embedding_map, kernel_library, symbolizer, demangler = \
                 self.compile(function, args, kwargs, set_result)
