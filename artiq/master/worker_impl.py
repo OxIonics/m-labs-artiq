@@ -256,28 +256,33 @@ class ExamineDatasetMgr:
 
 def examine(device_mgr, dataset_mgr, file):
     previous_keys = set(sys.modules.keys())
+    tracer = trace.get_tracer("worker")
     try:
-        module = tools.file_import(file)
+        with tracer.start_as_current_span("file_import"):
+            module = tools.file_import(file)
         for class_name, exp_class in inspect.getmembers(module, is_public_experiment):
-            if exp_class.__doc__ is None:
-                name = class_name
-            else:
-                name = exp_class.__doc__.strip().splitlines()[0].strip()
-                if name[-1] == ".":
-                    name = name[:-1]
-            argument_mgr = TraceArgumentManager()
-            scheduler_defaults = {}
-            cls = exp_class(  # noqa: F841 (fill argument_mgr)
-                (device_mgr, dataset_mgr, argument_mgr, scheduler_defaults)
-            )
-            arginfo = OrderedDict(
-                (k, (proc.describe(), group, tooltip))
-                for k, (proc, group, tooltip) in argument_mgr.requested_args.items()
-            )
-            argument_ui = None
-            if hasattr(exp_class, "argument_ui"):
-                argument_ui = exp_class.argument_ui
-            register_experiment(class_name, name, arginfo, argument_ui, scheduler_defaults)
+            with tracer.start_as_current_span("examine-class", attributes={
+                "class_name": class_name,
+            }):
+                if exp_class.__doc__ is None:
+                    name = class_name
+                else:
+                    name = exp_class.__doc__.strip().splitlines()[0].strip()
+                    if name[-1] == ".":
+                        name = name[:-1]
+                argument_mgr = TraceArgumentManager()
+                scheduler_defaults = {}
+                cls = exp_class(  # noqa: F841 (fill argument_mgr)
+                    (device_mgr, dataset_mgr, argument_mgr, scheduler_defaults)
+                )
+                arginfo = OrderedDict(
+                    (k, (proc.describe(), group, tooltip))
+                    for k, (proc, group, tooltip) in argument_mgr.requested_args.items()
+                )
+                argument_ui = None
+                if hasattr(exp_class, "argument_ui"):
+                    argument_ui = exp_class.argument_ui
+                register_experiment(class_name, name, arginfo, argument_ui, scheduler_defaults)
     finally:
         new_keys = set(sys.modules.keys())
         for key in new_keys - previous_keys:
@@ -497,7 +502,9 @@ def main(argv=None):
                     worker.set_attributes(
                         {
                             "type": "examine",
-                            "rid": rid,
+                            # When we have repeated examines in the same worker
+                            # they should all have the same RID.
+                            "rid": obj["rid"],
                         }
                     )
                     with tracer.start_as_current_span(
