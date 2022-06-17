@@ -499,14 +499,7 @@ def main(argv=None):
                         logger.debug("Completed analyze")
                         put_completed()
                 elif action == "examine":
-                    worker.set_attributes(
-                        {
-                            "type": "examine",
-                            # When we have repeated examines in the same worker
-                            # they should all have the same RID.
-                            "rid": obj["rid"],
-                        }
-                    )
+                    worker.set_attributes({"type": "examine"})
                     with tracer.start_as_current_span(
                             "examine",
                             attributes={
