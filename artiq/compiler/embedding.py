@@ -769,6 +769,17 @@ class Stitcher:
         self.embedding_map = EmbeddingMap()
         self.value_map = defaultdict(lambda: [])
         self.definitely_changed = False
+        self._core_name = None
+
+    def _check_core(self, core_name):
+        if self._core_name is not None:
+            return self._core_name == core_name
+
+        if self.dmgr.get(core_name) == self.core:
+            self._core_name = core_name
+            return True
+        else:
+            return False
 
     def stitch_call(self, function, args, kwargs, callback=None):
         # We synthesize source code for the initial call so that
@@ -1194,7 +1205,7 @@ class Stitcher:
                 self.engine.process(diag)
 
             core_name = host_function.artiq_embedded.core_name
-            if core_name is not None and self.dmgr.get(core_name) != self.core:
+            if core_name is not None and not self._check_core(core_name):
                 note = diagnostic.Diagnostic("note",
                     "called from this function", {},
                     loc)
