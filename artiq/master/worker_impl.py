@@ -20,6 +20,8 @@ from collections import OrderedDict
 
 import h5py
 from opentelemetry import trace
+from opentelemetry.trace import format_trace_id
+
 from sipyco import pipe_ipc, pyon
 from sipyco.packed_exceptions import raise_packed_exc
 from sipyco.logging_tools import multiline_log_config
@@ -444,7 +446,10 @@ def main(argv=None):
                         logger.debug("Couldn't start tracing", exc_info=True)
                     tracer = trace.get_tracer("worker")
                     worker = stack.enter_context(tracer.start_as_current_span("worker"))
-                    logger.info(f"Starting trace with id: {worker.get_span_context().trace_id}")
+                    trace_id_str = trace.format_trace_id(
+                        worker.get_span_context().trace_id
+                    )
+                    logger.info(f"Starting trace with id: {trace_id_str}")
 
                 action = obj["action"]
                 if action == "build":
