@@ -308,7 +308,7 @@ class WorkerManager:
                     log.warning("Connection to master lost")
                     break
                 tasks.add_background(self._handle_msg(line))
-        except asyncio.CancelledError:
+        except (GracefulExit, asyncio.CancelledError):
             log.info(f"Worker manager stopping")
             initiate_close = True
         except ConnectionError as ex:
