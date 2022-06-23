@@ -61,21 +61,18 @@ def log_worker_exception():
         logger.error("worker exception details", exc_info=True)
 
 
-async def _iterate_logs(source_cb, stream_name, log_lines: AsyncIterator[str]):
-    # Heavily inspired by sipyco.logging_tools.LogParser.stream_task but this
-    # will work with any AsyncIterator not just StreamReaders and it expects the
-    # iterator to terminate at the end and newlines to already be stripped.
+def _make_output_handler(source_cb):
     log_parser = LogParser(source_cb)
-    async for entry in log_lines:
+
+    async def handle_output(entry):
+        # Don't await inside this async function to avoid blocking the
+        # WorkerManagerProxy receive loop
         try:
             log_parser.line_input(entry)
         except:
             logger.debug("exception in log forwarding", exc_info=True)
-            break
-    logger.debug(
-        "stopped log forwarding of stream %s of %s",
-        stream_name, source_cb()
-    )
+
+    return handle_output
 
 
 class Worker:
@@ -125,12 +122,14 @@ class Worker:
             raise WorkerError("Attempting to create process after close")
         if self._created:
             return  # process already exists, recycle
-        (stdout, stderr) = await self._transport.create(self.rid, log_level)
+        await self._transport.create(
+            self.rid, log_level,
+            _make_output_handler(self._get_log_source),
+            _make_output_handler(self._get_log_source),
+        )
 
         self._created = True
         self._handle_worker_requests_task = asyncio.create_task(self._handle_worker_requests())
-        asyncio.create_task(_iterate_logs(self._get_log_source, "stdout", stdout))
-        asyncio.create_task(_iterate_logs(self._get_log_source, "stderr", stderr))
 
     async def close(self, term_timeout=2.0):
         """Interrupts any I/O with the worker process and terminates the

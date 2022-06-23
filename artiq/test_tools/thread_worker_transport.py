@@ -2,15 +2,14 @@ import asyncio
 from contextlib import ExitStack, contextmanager
 import logging
 import threading
-from typing import Any, AsyncIterator, Optional, Tuple
+from typing import List, Optional
 import uuid
 
 from sipyco import logging_tools, pyon
 
 from artiq.compiler import import_cache
 from artiq.master import worker_impl
-from artiq.master.worker_transport import WorkerTransport
-from artiq.queue_tools import iterate_queue
+from artiq.master.worker_transport import OutputHandler, WorkerTransport
 from artiq.test_tools import thread_pipe_ipc
 
 logger = logging.getLogger(__name__)
@@ -26,22 +25,27 @@ class BadThreadAccess(RuntimeError):
 
 class LoggingCapture(logging.Handler):
 
-    def __init__(self, loop, queue: asyncio.Queue):
+    def __init__(self, loop, cb: OutputHandler):
         super().__init__()
         self._loop = loop
-        self._queue = queue
+        self._cb = cb
+
+    async def _emit(self, lines: List[str]):
+        for line in lines:
+            await self._cb(line)
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             msg = self.format(record)
-            f = asyncio.run_coroutine_threadsafe(self._queue.put(msg), self._loop)
-            f.result(1)
+            asyncio.run_coroutine_threadsafe(
+                self._emit(msg.splitlines()), self._loop
+            ).result()
         except Exception:
             self.handleError(record)
 
 
 @contextmanager
-def capture_worker_logs(thread_name, level, queue: asyncio.Queue):
+def capture_worker_logs(thread_name, level, cb: OutputHandler):
     def ignoreWorkerLogs(record):
         return record.threadName != thread_name
 
@@ -49,7 +53,7 @@ def capture_worker_logs(thread_name, level, queue: asyncio.Queue):
     for handler in root_logger.handlers:
         handler.addFilter(ignoreWorkerLogs)
 
-    handler = LoggingCapture(asyncio.get_running_loop(), queue)
+    handler = LoggingCapture(asyncio.get_running_loop(), cb)
     handler.addFilter(lambda record: record.threadName == thread_name)
     handler.setLevel(level)
     handler.setFormatter(logging_tools.MultilineFormatter())
@@ -61,14 +65,6 @@ def capture_worker_logs(thread_name, level, queue: asyncio.Queue):
         root_logger.removeHandler(handler)
         for handler in root_logger.handlers:
             handler.removeFilter(ignoreWorkerLogs)
-        queue.put_nowait(None)
-
-
-async def aempty() -> AsyncIterator[Any]:
-    """ An empty async iterator
-    """
-    for _ in []:
-        yield
 
 
 _done_import_hook = False
@@ -110,15 +106,18 @@ class ThreadWorkerTransport(WorkerTransport):
         self._stopped = False
         self.ipc: Optional[thread_pipe_ipc.AsyncioParentComm] = None
 
-    async def create(self, rid, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
+    async def create(
+            self, rid: str, log_level: int,
+            stdout_handler: OutputHandler,
+            stderr_handler: OutputHandler,
+    ):
         install_import_hook()
         # A different uuid from the one we use to identify the worker else where
         # :sad_face:
         thread_name = f"worker-{uuid.uuid4()}"
-        log_queue = asyncio.Queue(100)
         self.ipc = thread_pipe_ipc.AsyncioParentComm()
         await self.ipc.connect()
-        self._exit.enter_context(capture_worker_logs(thread_name, log_level, log_queue))
+        self._exit.enter_context(capture_worker_logs(thread_name, log_level, stderr_handler))
         self._thread = threading.Thread(
             name=thread_name,
             target=lambda: _worker_trampoline(
@@ -130,11 +129,6 @@ class ThreadWorkerTransport(WorkerTransport):
             daemon=True,
         )
         self._thread.start()
-
-        return (
-            aempty(),
-            iterate_queue(log_queue)
-        )
 
     async def send(self, msg: str):
         self.ipc.write((msg + "\n").encode())
