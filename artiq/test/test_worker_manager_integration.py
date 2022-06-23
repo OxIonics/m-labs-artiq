@@ -3,33 +3,16 @@ from contextlib import AsyncExitStack
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 import logging
-from typing import AsyncIterator, Tuple
+from typing import List
 import uuid
 
 import pytest
 
 from artiq.master.worker_managers import ManagedWorkerTransport
-from artiq.master.worker_transport import WorkerTransport
-from artiq.queue_tools import iterate_queue
+from artiq.master.worker_transport import OutputHandler, WorkerTransport
 from artiq.test.consts import BIND
 from artiq.test.helpers import assert_num_connection, wait_for
 from artiq.worker_manager.worker_manager import WorkerManager
-
-
-try:
-    # anext not defined until python 3.10
-    # https://bugs.python.org/issue31861
-    anext
-except NameError:
-    # this is an example definition from that issue
-    def anext(iterator):
-        if not isinstance(iterator, AsyncIterator):
-            raise TypeError(
-                '%r object is not an asynchronous iterator'
-                % (type(iterator).__name__,)
-            )
-
-        return iterator.__anext__()
 
 
 class FakeWorker:
@@ -38,17 +21,17 @@ class FakeWorker:
         self.received = []
         self.closed = False
         self.send_queue = asyncio.Queue()
-        self.stdout_queue = asyncio.Queue()
-        self.stderr_queue = asyncio.Queue()
+        self.stdout_handler = None
+        self.stderr_handler = None
 
     def send(self, msg):
         self.send_queue.put_nowait(msg)
 
-    def put_stdout(self, data: str):
-        self.stdout_queue.put_nowait(data)
+    async def put_stdout(self, data: str):
+        await self.stdout_handler(data)
 
-    def put_stderr(self, data: str):
-        self.stderr_queue.put_nowait(data)
+    async def put_stderr(self, data: str):
+        await self.stderr_handler(data)
 
     async def assert_recv(self, msg):
         assert len(self.received) > 0
@@ -63,11 +46,13 @@ class FakeWorkerTransport(WorkerTransport):
     def __init__(self):
         self.worker = FakeWorker()
 
-    async def create(self, rid, log_level) -> Tuple[AsyncIterator[str], AsyncIterator[str]]:
-        return (
-            iterate_queue(self.worker.stdout_queue),
-            iterate_queue(self.worker.stderr_queue)
-        )
+    async def create(
+            self, rid: str, log_level: int,
+            stdout_handler: OutputHandler,
+            stderr_handler: OutputHandler,
+    ):
+        self.worker.stdout_handler = stdout_handler
+        self.worker.stderr_handler = stderr_handler
 
     async def send(self, msg: str):
         self.worker.received.append(msg)
@@ -78,8 +63,6 @@ class FakeWorkerTransport(WorkerTransport):
     async def close(self, term_timeout, rid):
         self.worker.closed = True
         self.worker.send_queue.put_nowait("")
-        self.worker.stdout_queue.put_nowait(None)
-        self.worker.stderr_queue.put_nowait(None)
 
 
 @pytest.fixture()
@@ -100,16 +83,43 @@ async def worker_manager(worker_manager_db, worker_manager_port):
 class ConnectedWorker:
     master: ManagedWorkerTransport
     worker: FakeWorker
-    forwarded_stdout: AsyncIterator[str]
-    forwarded_stderr: AsyncIterator[str]
+    forwarded_stdout: List[str]
+    forwarded_stderr: List[str]
+
+
+async def ignore(data):
+    pass
+
+
+async def transport_create(
+    transport: WorkerTransport,
+    rid="test",
+    log_level=logging.DEBUG,
+    stdout_handler=ignore,
+    stderr_handler=ignore,
+):
+    return await transport.create(rid, log_level, stdout_handler, stderr_handler)
 
 
 @pytest.fixture()
 async def worker_pair(worker_manager_db, worker_manager):
+    forwarded_stdout = []
+    forwarded_stderr = []
+
+    def make_append_wrapper(lst):
+        async def append_wrapper(data):
+            lst.append(data)
+
+        return append_wrapper
+
     transport = worker_manager_db.get_transport(worker_manager.id)
-    (stdout, stderr) = await transport.create("test", logging.DEBUG)
+    await transport_create(
+        transport,
+        stdout_handler=make_append_wrapper(forwarded_stdout),
+        stderr_handler=make_append_wrapper(forwarded_stderr),
+    )
     worker = worker_manager._workers[transport._id].transport.worker
-    return ConnectedWorker(transport, worker, stdout, stderr)
+    return ConnectedWorker(transport, worker, forwarded_stdout, forwarded_stderr)
 
 
 async def test_worker_manager_connection(worker_manager_db, worker_manager_port):
@@ -133,7 +143,7 @@ async def test_worker_manager_connection(worker_manager_db, worker_manager_port)
 async def test_worker_manager_create_worker(worker_manager_db, worker_manager):
     transport = worker_manager_db.get_transport(worker_manager.id)
 
-    await wait_for(transport.create("test", logging.DEBUG))
+    await wait_for(transport_create(transport))
 
     assert worker_manager._workers.keys() == {transport._id}
 
@@ -156,61 +166,50 @@ async def test_send_message_from_worker(worker_pair: ConnectedWorker):
     assert msg == actual
 
 
+def assert_equal(actual, expected):
+    assert actual == expected
+
+
 async def test_forward_stdout_from_worker_to_master(worker_pair: ConnectedWorker):
     stdout = "Some stdout"
 
-    worker_pair.worker.put_stdout(stdout)
+    await worker_pair.worker.put_stdout(stdout)
 
-    actual = await wait_for(anext(worker_pair.forwarded_stdout))
-
-    assert stdout == actual
+    await wait_for(lambda: assert_equal(worker_pair.forwarded_stdout, [stdout]))
 
 
 async def test_forward_stderr_from_worker_to_master(worker_pair: ConnectedWorker):
     stderr = "Some stderr"
 
-    worker_pair.worker.put_stderr(stderr)
+    await worker_pair.worker.put_stderr(stderr)
 
-    actual = await wait_for(anext(worker_pair.forwarded_stderr))
-
-    assert stderr == actual
-
-
-async def atake(iter, n):
-    rv = []
-    for _ in range(n):
-        rv.append(await anext(iter))
-    return rv
+    await wait_for(lambda: assert_equal(worker_pair.forwarded_stderr, [stderr]))
 
 
 async def test_forward_blank_lines_from_worker_to_master(worker_pair: ConnectedWorker):
     stderr1 = "Some stderr"
     stderr2 = "Some more"
 
-    worker_pair.worker.put_stderr(stderr1)
-    worker_pair.worker.put_stderr("")
-    worker_pair.worker.put_stderr(stderr2)
+    await worker_pair.worker.put_stderr(stderr1)
+    await worker_pair.worker.put_stderr("")
+    await worker_pair.worker.put_stderr(stderr2)
 
-    actual = await wait_for(atake(worker_pair.forwarded_stderr, 3))
-
-    assert actual == [
-        stderr1, "", stderr2,
-    ]
-
-
-async def acollect(iter):
-    return [x async for x in iter]
+    await wait_for(lambda: assert_equal(
+        worker_pair.forwarded_stderr,
+        [stderr1, "", stderr2],
+    ))
 
 
-async def test_termination_of_forwarding_from_worker_to_master(worker_pair: ConnectedWorker):
+async def test_ignore_legacy_sentinels(worker_pair: ConnectedWorker):
     last_err = "Last error message"
 
-    worker_pair.worker.put_stderr(last_err)
-    worker_pair.worker.put_stderr(None)
+    await worker_pair.worker.put_stderr(last_err)
+    await worker_pair.worker.put_stderr(None)
 
-    actual = await wait_for(acollect(worker_pair.forwarded_stderr))
+    # How do we tell that the worker has closed in this test?
+    await asyncio.sleep(0.3)
 
-    assert actual == [last_err]
+    assert worker_pair.forwarded_stderr == [last_err]
 
 
 async def test_closing_worker(worker_pair: ConnectedWorker):
@@ -250,7 +249,7 @@ async def test_late_worker_create_and_then_close(worker_manager_db, worker_manag
     await wait_for(lambda: assert_disconnected(proxy))
 
     with pytest.raises(Exception) as exc_info:
-        await transport.create("test", logging.DEBUG)
+        await transport_create(transport)
 
     logging.info("create failed as expected", exc_info=exc_info.value)
 
