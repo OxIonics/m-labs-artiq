@@ -102,6 +102,60 @@ class _WorkerState:
         self.closing = False
 
 
+class MultiWriter:
+    """ A wrapper around StreamWriter which it's safe to call `drain` on
+    concurrently
+    """
+
+    def __init__(self, writer):
+        self._writer: asyncio.StreamWriter = writer
+        self._drain_waiter: Optional[asyncio.Task] = None
+
+    @property
+    def transport(self):
+        return self._writer.transport
+
+    def write(self, data):
+        return self._writer.write(data)
+
+    def write_eof(self):
+        return self._writer.write_eof()
+
+    def close(self):
+        return self._writer.close()
+
+    async def wait_closed(self):
+        return await self._writer.wait_closed()
+
+    async def drain(self):
+        """Concurrent safe version of drain
+        """
+        # StreamWriter.drain hits an internal assertion if it's called more than
+        # once concurrently and actually has to suspend.
+        # This function wraps calls to drain and creates a future so that
+        # concurrent callers wait for the first caller to finish.
+        if self._drain_waiter is None:
+            waiter = self._drain_waiter = asyncio.get_event_loop().create_future()
+            try:
+                try:
+                    await self._writer.drain()
+                finally:
+                    # Clear `_drain_waiter` before propagating the response to
+                    # make sure that any further triggered calls call the
+                    # underlying drain again.
+                    self._drain_waiter = None
+            except asyncio.CancelledError:
+                waiter.cancel()
+                raise
+            except Exception as ex:
+                waiter.set_exception(ex)
+                raise
+            else:
+                waiter.set_result(None)
+        else:
+            await self._drain_waiter
+
+
 class WorkerManager:
 
     @classmethod
@@ -173,7 +227,7 @@ class WorkerManager:
         self._id = worker_manager_id
         self._description = description
         self._reader: asyncio.StreamReader = reader
-        self._writer: asyncio.StreamWriter = writer
+        self._writer = MultiWriter(writer)
         self._transport_factory: Callable[[], WorkerTransport] = transport_factory
         self._task: Optional[asyncio.Task] = None
         self._workers: Dict[str, _WorkerState] = {}
