@@ -125,6 +125,12 @@ class MultiWriter:
     async def wait_closed(self):
         return await self._writer.wait_closed()
 
+    async def _drain(self):
+        try:
+            await self._writer.drain()
+        finally:
+            self._drain_waiter = None
+
     async def drain(self):
         """Concurrent safe version of drain
         """
@@ -132,26 +138,12 @@ class MultiWriter:
         # once concurrently and actually has to suspend.
         # This function wraps calls to drain and creates a future so that
         # concurrent callers wait for the first caller to finish.
+        # We shield the actual drain call so that if the first caller is
+        # cancelled this doesn't cancel the drain call and therefore the second
+        # caller.
         if self._drain_waiter is None:
-            waiter = self._drain_waiter = asyncio.get_event_loop().create_future()
-            try:
-                try:
-                    await self._writer.drain()
-                finally:
-                    # Clear `_drain_waiter` before propagating the response to
-                    # make sure that any further triggered calls call the
-                    # underlying drain again.
-                    self._drain_waiter = None
-            except asyncio.CancelledError:
-                waiter.cancel()
-                raise
-            except Exception as ex:
-                waiter.set_exception(ex)
-                raise
-            else:
-                waiter.set_result(None)
-        else:
-            await self._drain_waiter
+            self._drain_waiter = asyncio.shield(self._drain())
+        await self._drain_waiter
 
 
 class WorkerManager:
