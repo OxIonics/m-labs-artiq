@@ -124,7 +124,7 @@ fn connection_worker(io: &Io, _aux_mutex: &Mutex, _routing_table: &drtio_routing
 
     read_magic(&mut stream)?;
     stream.write_all("e".as_bytes())?;
-    info!("new connection from {}", stream.remote_endpoint());
+    debug!("new connection from {}", stream.remote_endpoint());
 
     loop {
         if stream.can_recv() {
