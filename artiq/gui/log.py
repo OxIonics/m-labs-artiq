@@ -171,7 +171,7 @@ class _Model(QtCore.QAbstractItemModel):
 
 
 class LogDock(QDockWidgetCloseDetect):
-    def __init__(self, manager, name):
+    def __init__(self, manager, name, explorer=None):
         QDockWidgetCloseDetect.__init__(self, "Log")
         self.setObjectName(name)
 
@@ -201,6 +201,8 @@ class LogDock(QDockWidgetCloseDetect):
         grid.addWidget(clear, 0, 4)
         clear.clicked.connect(lambda: self.model.clear())
 
+        columns = 5
+
         if manager:
             newdock = QtWidgets.QToolButton()
             newdock.setToolTip("Create new log dock")
@@ -208,7 +210,21 @@ class LogDock(QDockWidgetCloseDetect):
                 QtWidgets.QStyle.SP_FileDialogNewFolder))
             # note the lambda, the default parameter is overriden otherwise
             newdock.clicked.connect(lambda: manager.create_new_dock())
-            grid.addWidget(newdock, 0, 5)
+            grid.addWidget(newdock, 0, columns)
+            columns += 1
+
+        self.explorer = explorer
+        if explorer:
+            self.filter_worker = QtWidgets.QComboBox()
+            self.filter_worker.addItems(["All workers", "Current repo workers"])
+            self.filter_worker.setToolTip(
+                "Filter the logs shown by which worker manager they originated from"
+            )
+            grid.addWidget(self.filter_worker, 0, columns)
+            columns += 1
+        else:
+            self.filter_worker = None
+
         grid.layout.setColumnStretch(2, 1)
 
         self.log = QtWidgets.QTreeView()
@@ -217,7 +233,7 @@ class LogDock(QDockWidgetCloseDetect):
         self.log.setVerticalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel)
         self.log.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        grid.addWidget(self.log, 1, 0, colspan=6 if manager else 5)
+        grid.addWidget(self.log, 1, 0, colspan=columns)
         self.scroll_at_bottom = False
         self.scroll_value = 0
 
@@ -259,7 +275,17 @@ class LogDock(QDockWidgetCloseDetect):
         else:
             accepted_freetext = True
 
-        if accepted_level and accepted_freetext:
+        if self.filter_worker and self.filter_worker.currentIndex() != 0:
+            active_worker_desc = self.explorer.get_active_worker_description()
+            source_worker = re.match(r"[^(]*\(([^),]*)[,)]", msg[1])
+            accepted_worker = (
+                    source_worker
+                    and source_worker.group(1) == active_worker_desc
+            )
+        else:
+            accepted_worker = True
+
+        if accepted_level and accepted_freetext and accepted_worker:
             self.model.append(msg)
 
     def scroll_to_bottom(self):
@@ -325,8 +351,9 @@ class LogDock(QDockWidgetCloseDetect):
 
 
 class LogDockManager:
-    def __init__(self, main_window):
+    def __init__(self, main_window, explorer=None):
         self.main_window = main_window
+        self.explorer = explorer
         self.docks = dict()
 
     def append_message(self, msg):
@@ -340,7 +367,7 @@ class LogDockManager:
             n += 1
             name = "log" + str(n)
 
-        dock = LogDock(self, name)
+        dock = LogDock(self, name, self.explorer)
         self.docks[name] = dock
         if add_to_area:
             self.main_window.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
@@ -370,7 +397,7 @@ class LogDockManager:
         if self.docks:
             raise NotImplementedError
         for name, dock_state in state.items():
-            dock = LogDock(self, name)
+            dock = LogDock(self, name, self.explorer)
             self.docks[name] = dock
             dock.restore_state(dock_state)
             self.main_window.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
