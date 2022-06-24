@@ -84,7 +84,7 @@ fn process_aux_packet(_repeaters: &mut [repeater::Repeater],
         drtioaux::Packet::EchoRequest =>
             drtioaux::send(0, &drtioaux::Packet::EchoReply),
         drtioaux::Packet::ResetRequest => {
-            info!("resetting RTIO");
+            debug!("resetting RTIO");
             drtiosat_reset(true);
             clock::spin_us(100);
             drtiosat_reset(false);

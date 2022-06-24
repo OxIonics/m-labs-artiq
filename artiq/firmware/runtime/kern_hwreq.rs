@@ -219,7 +219,7 @@ pub fn process_kern_hwreq(io: &Io, aux_mutex: &Mutex,
         request: &kern::Message) -> Result<bool, Error<SchedError>> {
     match request {
         &kern::RtioInitRequest => {
-            info!("resetting RTIO");
+            debug!("resetting RTIO");
             rtio_mgt::reset(io, aux_mutex);
             kern_acknowledge()
         }
