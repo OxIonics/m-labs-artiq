@@ -261,7 +261,7 @@ def main():
     )
     smgr.register(d_worker_managers)
 
-    logmgr = log.LogDockManager(main_window)
+    logmgr = log.LogDockManager(main_window, d_explorer)
     smgr.register(logmgr)
     broadcast_clients["log"].notify_cbs.append(logmgr.append_message)
     widget_log_handler.callback = logmgr.append_message
