@@ -14,7 +14,7 @@ from artiq import __version__ as software_version
 
 
 logger = logging.getLogger(__name__)
-version_re = re.compile(r"^\d+\.\d+\+g[\da-z]+\.fw(?P<fw>[\da-z]+)(?P<dirty>\.dirty)+?")
+version_re = re.compile(r"^\d+\.\d+\+g[\da-z]+\.fw(?P<fw>[\da-z]+)(?P<dirty>\.dirty)?")
 
 
 class Request(Enum):
