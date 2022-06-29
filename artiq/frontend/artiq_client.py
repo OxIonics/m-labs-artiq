@@ -21,7 +21,7 @@ from operator import itemgetter
 from dateutil.parser import parse as parse_date
 
 from prettytable import PrettyTable
-
+from pythonjsonlogger.jsonlogger import JsonFormatter
 from artiq.display_tools import make_connection_string
 from sipyco.common_args import init_logger_from_args
 from sipyco.pc_rpc import AsyncioClient, Client
@@ -76,6 +76,12 @@ def get_argparser():
     parser.add_argument("--version", action="version",
                         version="ARTIQ v{}".format(artiq_version),
                         help="print the ARTIQ version number")
+    parser.add_argument(
+        "--json-logs",
+        default=False,
+        action="store_true",
+        help="Write logs as json rather than text",
+    )
 
     subparsers = parser.add_subparsers(dest="action")
     subparsers.required = True
@@ -240,6 +246,8 @@ async def _make_worker_manager(args):
     ]
     if args.verbose:
         cmd.append("-" + "v" * args.verbose)
+    if args.json_logs:
+        cmd.append("--json-logs")
 
     connected = asyncio.get_event_loop().create_future()
 
@@ -557,6 +565,11 @@ def _show_ccb(args):
 def main():
     args = get_argparser().parse_args()
     init_logger_from_args(args)
+    if args.json_logs:
+        root_logger = logging.getLogger()
+        root_logger.handlers[0].setFormatter(JsonFormatter(
+            "%(asctime)s %(levelname)s:%(name)s:%(message)s"
+        ))
     args.func(args)
 
 
