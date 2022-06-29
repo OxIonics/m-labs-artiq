@@ -216,6 +216,18 @@ class _LogFilterProxyModel(QtCore.QSortFilterProxyModel):
         return model.full_entry(source_index)
 
 
+
+class _LogView(QtWidgets.QTreeView):
+    copy = QtCore.pyqtSignal(name="copy")
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event == QtGui.QKeySequence.Copy:
+            self.copy.emit()
+            return
+
+        return super().keyPressEvent(event)
+
+
 class LogDock(QDockWidgetCloseDetect):
     def __init__(self, manager, name, explorer=None):
         QDockWidgetCloseDetect.__init__(self, "Log")
@@ -278,12 +290,14 @@ class LogDock(QDockWidgetCloseDetect):
 
         grid.layout.setColumnStretch(2, 1)
 
-        self.log = QtWidgets.QTreeView()
+        self.log = _LogView()
         self.log.setHorizontalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel)
         self.log.setVerticalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel)
         self.log.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
+        self.log.setSelectionMode(QtWidgets.QAbstractItemView.ContiguousSelection)
+        self.log.copy.connect(self.copy_to_clipboard)
         grid.addWidget(self.log, 1, 0, colspan=columns)
         self.scroll_at_bottom = False
         self.suppress_scroll = False
@@ -387,10 +401,19 @@ class LogDock(QDockWidgetCloseDetect):
             scrollbar.setValue(self.scroll_value)
 
     def copy_to_clipboard(self):
-        idx = self.log.selectedIndexes()
-        if idx:
-            entry = "\n".join(self.filter_model.full_entry(idx[0]))
-            QtWidgets.QApplication.clipboard().setText(entry)
+        idxs = self.log.selectedIndexes()
+
+        lines = []
+        seen_rows = set()
+        for idx in idxs:
+            if idx.row() in seen_rows:
+                continue
+
+            seen_rows.add(idx.row())
+            lines.extend(self.filter_model.full_entry(idx))
+
+        if lines:
+            QtWidgets.QApplication.clipboard().setText("\n".join(lines))
 
     def save_state(self):
         return {
