@@ -197,12 +197,23 @@ class _LogFilterProxyModel(QtCore.QSortFilterProxyModel):
                 return False
 
         if self.worker:
-            source_worker = re.match(r"[^(]*\(([^),]*)[,)]", model.entries[msgnum][3][0])
+            source_worker = re.match(r"[^(]*\(([^),]*)[,)]", model.entries[msgnum][1])
             accepted_worker = source_worker and source_worker.group(1) == self.worker
             if not accepted_worker:
                 return False
 
         return True
+
+    def full_entry(self, index):
+        if not index.isValid():
+            return []
+
+        source_index = self.mapToSource(index)
+        if not source_index.isValid():
+            return []
+
+        model: _Model = self.sourceModel()
+        return model.full_entry(source_index)
 
 
 class LogDock(QDockWidgetCloseDetect):
@@ -313,9 +324,6 @@ class LogDock(QDockWidgetCloseDetect):
         """A context manager used when changing the filter.
 
         This automatically invalidates the filter when the context is closed."""
-        if not hasattr(self, "filter_model"):
-            return
-
         # Filtering rows causes multiple insert/remove calls. We don't want to scroll
         # for every one of them as it causes filtering to be much slower.
         self.suppress_scroll = True
@@ -381,7 +389,7 @@ class LogDock(QDockWidgetCloseDetect):
     def copy_to_clipboard(self):
         idx = self.log.selectedIndexes()
         if idx:
-            entry = "\n".join(self.model.full_entry(idx[0]))
+            entry = "\n".join(self.filter_model.full_entry(idx[0]))
             QtWidgets.QApplication.clipboard().setText(entry)
 
     def save_state(self):
