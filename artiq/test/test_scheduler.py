@@ -58,9 +58,11 @@ class BackgroundExperiment(EnvExperiment):
 class IdleExperiment(EnvExperiment):
     def build(self):
         self.setattr_device("scheduler")
+        self._idle_check = 0
 
     def _be_idle(self):
-        return self.get_dataset("be_idle", archive=False)
+        self._idle_check += 1
+        return self.get_dataset(f"be_idle.{self._idle_check}", archive=False)
 
     def run(self):
         def is_idle():
@@ -514,6 +516,8 @@ class SchedulerCase(unittest.TestCase):
         flags = Flags()
 
         def get_dataset(name):
+            if name.startswith("be_idle"):
+                return flags.be_idle
             return getattr(flags, name)
 
         def check_termination(mod):
