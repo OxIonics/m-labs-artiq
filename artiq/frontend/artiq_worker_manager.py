@@ -66,6 +66,17 @@ def main():
         help="Write logs as json rather than text",
     )
     parser.add_argument(
+        "--ephemeral",
+        default=False,
+        action="store_true",
+        help="If --ephemeral is set a short reconnect time is always chosen. "
+             "Normally we choose whether to pass a long reconnect time based on "
+             "whether a id is passed. If an id is passed we choose a long "
+             "reconnect time so that the id can be reused, and if it's not we "
+             "choose a short one so that the master clears up this worker "
+             "manager quickly. Set this if you don't store the id."
+    )
+    parser.add_argument(
         "description",
         help="The human readable description for the worker manager"
     )
@@ -92,7 +103,7 @@ def main():
     else:
         transport_factory = PipeWorkerTransport
 
-    if args.id is None:
+    if args.ephemeral or args.id is None:
         reconnect_timeout = timedelta(seconds=0)
     else:
         reconnect_timeout = timedelta(days=7)

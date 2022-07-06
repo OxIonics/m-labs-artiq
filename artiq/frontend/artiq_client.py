@@ -241,7 +241,7 @@ async def _make_worker_manager(args):
     worker_manager_id = str(uuid.uuid4())
     cmd = [
         sys.executable, "-m", "artiq.frontend.artiq_worker_manager",
-        "--id", worker_manager_id, "--exit-on-idle",
+        "--id", worker_manager_id, "--ephemeral", "--exit-on-idle",
         socket.gethostname(), args.server,
     ]
     if args.verbose:
