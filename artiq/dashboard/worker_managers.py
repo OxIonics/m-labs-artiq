@@ -18,8 +18,8 @@ log = logging.getLogger(__name__)
 # Most of the gets in the class are just needed for backwards compatibility
 # with an earlier version of worker managers.
 class _Model(DictSyncSimpleTableModel):
-    def __init__(self, local_worker_manager, init):
-        self.local_worker_manager: LocalWorkerManager = local_worker_manager
+    def __init__(self, local_worker_manager_id, init):
+        self.local_worker_manager_id: str = local_worker_manager_id
         super(_Model, self).__init__(
             [self.RowSpec("ID", lambda k, v: v["id"]),
              self.RowSpec("Status", self._show_status),
@@ -36,7 +36,7 @@ class _Model(DictSyncSimpleTableModel):
 
     def sort_key(self, k, v):
         return (
-            v["id"] != self.local_worker_manager.id,
+            v["id"] != self.local_worker_manager_id,
             not v.get("connected", True),
             v["description"],
             v.get("repo_root"),
@@ -46,7 +46,7 @@ class _Model(DictSyncSimpleTableModel):
 
     def _show_status(self, k, v):
         status = []
-        if v["id"] == self.local_worker_manager.id:
+        if v["id"] == self.local_worker_manager_id:
             status.append("Local")
 
         try:
@@ -82,8 +82,6 @@ class WorkerManagerDock(QtWidgets.QDockWidget):
 
     def __init__(
             self,
-            worker_manager_sub: ModelSubscriber,
-            local_worker_manager: LocalWorkerManager,
             worker_managers_rpc: AsyncioClient,
     ):
         QtWidgets.QDockWidget.__init__(self, "WorkerManagers")
@@ -99,10 +97,12 @@ class WorkerManagerDock(QtWidgets.QDockWidget):
         )
         self.setWidget(self.table)
 
-        self.model = _Model(local_worker_manager, {})
+        self.model = None
+
+    def start(self, local_worker_manager_id: str, worker_manager_sub: ModelSubscriber):
         ReplicantModelManager.with_setmodel_callback(
             worker_manager_sub,
-            lambda init: _Model(local_worker_manager, init),
+            lambda init: _Model(local_worker_manager_id, init),
             self.set_model
         )
 
