@@ -3,13 +3,10 @@
 import argparse
 import asyncio
 import atexit
+import faulthandler
 import importlib
 import os
 import logging
-import signal
-import socket
-import sys
-import uuid
 
 from PyQt5 import QtCore, QtGui, QtWidgets
 from qasync import QEventLoop
@@ -107,6 +104,8 @@ class MdiArea(QtWidgets.QMdiArea):
 
 
 def main():
+    faulthandler.enable()
+
     # initialize application
     args = get_argparser().parse_args()
     widget_log_handler = log.init_log(args, "dashboard")
@@ -114,6 +113,18 @@ def main():
         # This is super chatty on debug. Limit it to info unless we get more
         # than two verbose flags.
         logging.getLogger("qasync").setLevel(logging.INFO)
+
+    try:
+        import resource
+    except ImportError:
+        pass
+    else:
+        resource.setrlimit(
+            resource.RLIMIT_CORE,
+            (resource.RLIM_INFINITY, resource.RLIM_INFINITY),
+        )
+        core_limit = resource.getrlimit(resource.RLIMIT_CORE)
+        logging.info(f"Set core limit {core_limit}")
 
     if args.plugin_modules:
         for mod in args.plugin_modules:
