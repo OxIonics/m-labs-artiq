@@ -266,8 +266,6 @@ def main():
     smgr.register(d_schedule)
 
     d_worker_managers = worker_managers.WorkerManagerDock(
-        sub_clients["worker_managers"],
-        local_worker_manager,
         rpc_clients["worker_managers"],
     )
     smgr.register(d_worker_managers)
@@ -317,6 +315,7 @@ def main():
 
     init_quick_open_dialog(main_window, d_explorer, expmgr)
     local_worker_manager.start()
+    d_worker_managers.start(local_worker_manager.id, sub_clients["worker_managers"])
 
     if server_name is not None:
         server_description = server_name + " ({})".format(args.server)
