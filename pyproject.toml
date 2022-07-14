@@ -54,7 +54,7 @@ pyqt5 = { version = "^5.15", optional = true }
 migen = { version = "^0.9.2", optional = true }
 misoc = { version = "^0.12.186", optional = true }
 jsonschema = "^4.2.1"
-sipyco = "^1.2"
+sipyco = "^1.4"
 llvmlite = { version = "^0.38.0", optional = true }
 pyqt5-qt5 = { version = "^5.15.2", optional = true }
 pyqt5-sip = { version = "^12.9.0", optional = true }
