@@ -65,6 +65,10 @@ class PipeWorkerTransport(WorkerTransport):
         ipc = pipe_ipc.AsyncioParentComm()
         env = os.environ.copy()
         env["PYTHONUNBUFFERED"] = "1"
+        # We're going to capture the stdout and stderr of the subprocess and
+        # decode it with UTF-8. Better make sure it's encoded in UTF-8.
+        # On Windows it might not be by default.
+        env["PYTHONIOENCODING"] = "utf-8"
         await ipc.create_subprocess(
             sys.executable, "-m", "artiq.master.worker_impl",
             ipc.get_address(), str(log_level),
