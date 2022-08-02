@@ -100,6 +100,19 @@ class Core:
 
     def compile(self, function, args, kwargs, set_result=None,
                 attribute_writeback=True, print_as_rpc=True):
+         with trace.get_tracer(__name__).start_as_current_span(
+            "artiq-compile",
+            attributes={
+                "function": function.__qualname__,
+                "function_module": function.__module__,
+            },
+        ):
+            return self.compile_impl(
+                function, args, kwargs, set_result, attribute_writeback, print_as_rpc
+            )
+
+    def compile_impl(self, function, args, kwargs, set_result=None,
+                attribute_writeback=True, print_as_rpc=True):
         try:
             engine = _DiagnosticEngine(all_errors_are_fatal=True)
 
@@ -179,15 +192,8 @@ class Core:
             nonlocal result
             result = new_result
 
-        with trace.get_tracer(__name__).start_as_current_span(
-            "artiq-compile",
-            attributes={
-                "function": function.__qualname__,
-                "function_module": function.__module__,
-            },
-        ):
-            embedding_map, kernel_library, symbolizer, demangler = \
-                self.compile(function, args, kwargs, set_result, attribute_writeback=False)
+        embedding_map, kernel_library, symbolizer, demangler = \
+            self.compile(function, args, kwargs, set_result, attribute_writeback=False)
 
         @wraps(function)
         def run_precompiled():

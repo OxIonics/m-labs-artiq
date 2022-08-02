@@ -361,9 +361,6 @@ pub mod drtio {
     }
 }
 
-const ASYNC_ERROR_COLLISION: u8 = 1 << 0;
-const ASYNC_ERROR_BUSY: u8 = 1 << 1;
-const ASYNC_ERROR_SEQUENCE_ERROR: u8 = 1 << 2;
 static SEEN_ASYNC_ERRORS: AtomicU8 = AtomicU8::new(0);
 
 pub fn get_async_errors(io: &Io) -> Result<u8, Error> {
