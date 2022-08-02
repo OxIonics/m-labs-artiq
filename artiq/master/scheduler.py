@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from enum import Enum, unique
+import csv
 from time import time
 from functools import partial
 
@@ -128,8 +129,7 @@ class Run:
 
 
 class RunPool:
-    def __init__(self, ridc, worker_handlers, notifier, experiment_db,
-                 dataset_namespaces):
+    def __init__(self, ridc, worker_handlers, notifier, experiment_db, dataset_namespaces, log_submissions):
         self.runs = dict()
         self.state_changed = Condition()
 
@@ -138,6 +138,7 @@ class RunPool:
         self.notifier = notifier
         self.experiment_db: ExperimentDB = experiment_db
         self.dataset_namespaces = dataset_namespaces
+        self.log_submissions = log_submissions
 
     def submit(self, expid, priority, due_date, flush, pipeline_name):
         # mutates expid to insert head repository revision if None.
@@ -155,6 +156,8 @@ class RunPool:
         run = Run(rid, pipeline_name, wd, expid, priority, due_date, flush,
                   self, repo.get_worker_transport(),
                   repo_msg=repo_msg)
+        if self.log_submissions is not None:
+            self.log_submission(rid, expid)
         self.runs[rid] = run
         self.state_changed.notify()
         return rid
@@ -475,9 +478,9 @@ class AnalyzeStage(TaskObject):
 
 class Pipeline:
     def __init__(self, ridc, deleter, worker_handlers, notifier, experiment_db,
-                 dataset_namespaces):
+                 dataset_namespaces, log_submissions):
         self.pool = RunPool(ridc, worker_handlers, notifier, experiment_db,
-                            dataset_namespaces)
+                            dataset_namespaces, log_submissions)
         self._prepare = PrepareStage(self.pool, deleter.delete)
         self._run = RunStage(self.pool, deleter.delete)
         self._analyze = AnalyzeStage(self.pool, deleter.delete)
@@ -557,6 +560,7 @@ class Scheduler:
             worker_handlers,
             experiment_db,
             dataset_namespaces,
+            log_submissions,
     ):
         self.notifier = Notifier(dict())
 
@@ -568,6 +572,7 @@ class Scheduler:
 
         self._ridc = ridc
         self._deleter = Deleter(self._pipelines, dataset_namespaces)
+        self._log_submissions = log_submissions
 
     def start(self):
         self._deleter.start()
@@ -598,7 +603,8 @@ class Scheduler:
             logger.debug("creating pipeline '%s'", pipeline_name)
             pipeline = Pipeline(self._ridc, self._deleter,
                                 self._worker_handlers, self.notifier,
-                                self._experiment_db, self._dataset_namespaces)
+                                self._experiment_db, self._dataset_namespaces,
+                                self._log_submissions)
             self._pipelines[pipeline_name] = pipeline
             pipeline.start()
         return pipeline.pool.submit(
@@ -652,3 +658,12 @@ class Scheduler:
             return True
 
         return run != (await pipeline._run.highest_priority_run())
+
+    def check_termination(self, rid):
+        """Returns ``True`` if termination is requested."""
+        for pipeline in self._pipelines.values():
+            if rid in pipeline.pool.runs:
+                run = pipeline.pool.runs[rid]
+                if run.termination_requested:
+                    return True
+        return False

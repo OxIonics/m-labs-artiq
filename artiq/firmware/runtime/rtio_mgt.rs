@@ -7,6 +7,9 @@ use board_misoc::clock;
 use board_artiq::drtio_routing;
 use sched::{Error, Io};
 use sched::Mutex;
+const ASYNC_ERROR_COLLISION: u8 = 1 << 0;
+const ASYNC_ERROR_BUSY: u8 = 1 << 1;
+const ASYNC_ERROR_SEQUENCE_ERROR: u8 = 1 << 2;
 
 #[cfg(has_drtio)]
 pub mod drtio {

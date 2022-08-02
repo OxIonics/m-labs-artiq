@@ -106,6 +106,9 @@ def get_argparser():
     parser_add.add_argument("-r", "--revision", default=None,
                             help="use a specific repository revision "
                                  "(defaults to head, ignored without -R)")
+    parser_add.add_argument("--content", default=False,
+                            action="store_true",
+                            help="submit by content")
     parser_add.add_argument("-c", "--class-name", default=None,
                             help="name of the class to run")
     worker_mgr = parser_add.add_argument_group(
@@ -353,8 +356,15 @@ async def _submit(args):
             "arguments": arguments,
             "worker_manager_id": worker_manager_id,
         }
-        if args.repository:
-            expid["repo_rev"] = args.revision
+        if args.content:
+            with open(args.file, "r") as f:
+                expid["content"] = f.read()
+            if args.repository:
+                raise ValueError("Repository cannot be used when submitting by content")
+        else:
+            expid["file"] = args.file
+            if args.repository:
+                expid["repo_rev"] = args.revision
         if args.timed is None:
             due_date = None
         else:
@@ -460,7 +470,7 @@ def _show_schedule(schedule):
                            time.localtime(v["due_date"])))
             expid = v["expid"]
             row.append(make_exp_source(expid, v.get("repo_msg")))
-            row.append(expid["file"])
+            row.append(expid.get("file", "<none>"))
             if expid["class_name"] is None:
                 row.append("")
             else:
@@ -514,7 +524,8 @@ def _show_worker_managers(mgrs):
 
 
 def _run_subscriber(host, port, subscriber):
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(subscriber.connect(host, port))
         try:

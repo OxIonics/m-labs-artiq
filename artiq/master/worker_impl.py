@@ -17,6 +17,8 @@ import inspect
 import logging
 import traceback
 from collections import OrderedDict
+import importlib.util
+import linecache
 
 import h5py
 from opentelemetry import trace
@@ -242,6 +244,12 @@ class Scheduler:
             rid = self.rid
         return self._check_pause(rid)
 
+    _check_termination = staticmethod(make_parent_action("scheduler_check_termination"))
+    def check_termination(self, rid=None) -> TBool:
+        if rid is None:
+            rid = self.rid
+        return self._check_termination(rid)
+
     _submit = staticmethod(make_parent_action("scheduler_submit"))
     def submit(self, pipeline_name=None, expid=None, priority=None, due_date=None, flush=False):
         if pipeline_name is None:
@@ -262,8 +270,36 @@ class CCB:
     issue = staticmethod(make_parent_action("ccb_issue"))
 
 
-def get_experiment(file, class_name):
+def get_experiment_from_file(file, class_name):
     module = tools.file_import(file, prefix="artiq_worker_")
+    return tools.get_experiment(module, class_name)
+
+
+class StringLoader:
+    def __init__(self, fake_filename, content):
+        self.fake_filename = fake_filename
+        self.content = content
+
+    def get_source(self, fullname):
+        return self.content
+
+    def create_module(self, spec):
+        return None
+
+    def exec_module(self, module):
+        code = compile(self.get_source(self.fake_filename), self.fake_filename, "exec")
+        exec(code, module.__dict__)
+
+
+def get_experiment_from_content(content, class_name):
+    fake_filename = "expcontent"
+    spec = importlib.util.spec_from_loader(
+        "expmodule",
+        StringLoader(fake_filename, content)
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    linecache.lazycache(fake_filename, module.__dict__)
     return tools.get_experiment(module, class_name)
 
 
@@ -498,22 +534,28 @@ def main(argv=None):
                         start_time = time.time()
                         rid = obj["rid"]
                         expid = obj["expid"]
-                        if obj["wd"] is not None:
-                            # Using repository
-                            experiment_file = os.path.join(obj["wd"], expid["file"])
-                            repository_path = obj["wd"]
-                        else:
-                            experiment_file = expid["file"]
-                            repository_path = None
+
                         worker.set_attributes({
                             "type": "experiment",
                             "rid": rid,
-                            "experiment_file": experiment_file,
                         })
                         if expid["class_name"] is not None:
                             worker.set_attribute("class_name", expid["class_name"])
-                        setup_diagnostics(experiment_file, repository_path)
-                        exp = get_experiment(experiment_file, expid["class_name"])
+
+                        if "file" in expid:
+                            if obj["wd"] is not None:
+                                # Using repository
+                                experiment_file = os.path.join(obj["wd"], expid["file"])
+                                repository_path = obj["wd"]
+                            else:
+                                experiment_file = expid["file"]
+                                repository_path = None
+                            worker.set_attribute("experiment_file", experiment_file)
+                            setup_diagnostics(experiment_file, repository_path)
+                            exp = get_experiment_from_file(experiment_file, expid["class_name"])
+                        else:
+                            setup_diagnostics("<none>", None)
+                            exp = get_experiment_from_content(expid["content"], expid["class_name"])
                         device_mgr.virtual_devices["scheduler"].set_run_info(
                             rid, obj["pipeline_name"], expid, obj["priority"])
                         start_local_time = time.localtime(start_time)

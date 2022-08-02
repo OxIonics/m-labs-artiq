@@ -1,7 +1,7 @@
 {
   description = "A leading-edge control system for quantum information experiments";
 
-  inputs.nixpkgs.url = github:NixOS/nixpkgs/nixos-21.11;
+  inputs.nixpkgs.url = github:NixOS/nixpkgs/nixos-22.05;
   inputs.mozilla-overlay = { url = github:mozilla/nixpkgs-mozilla; flake = false; };
   inputs.sipyco.url = github:m-labs/sipyco;
   inputs.sipyco.inputs.nixpkgs.follows = "nixpkgs";
@@ -16,8 +16,9 @@
   outputs = { self, nixpkgs, mozilla-overlay, sipyco, src-pythonparser, artiq-comtools, src-migen, src-misoc }:
     let
       pkgs = import nixpkgs { system = "x86_64-linux"; overlays = [ (import mozilla-overlay) ]; };
+      pkgs-aarch64 = import nixpkgs { system = "aarch64-linux"; };
 
-      artiqVersionMajor = 7;
+      artiqVersionMajor = 8;
       artiqVersionMinor = self.sourceInfo.revCount or 0;
       artiqVersionId = self.sourceInfo.shortRev or "unknown";
       artiqVersion = (builtins.toString artiqVersionMajor) + "." + (builtins.toString artiqVersionMinor) + "." + artiqVersionId + ".beta";
@@ -113,22 +114,12 @@
 
       llvmlite-new = pkgs.python3Packages.buildPythonPackage rec {
         pname = "llvmlite";
-        version = "0.37.0-artiq";
+        version = "0.38.0";
         src = pkgs.python3Packages.fetchPypi {
           inherit pname;
-          version = "0.37.0";
-          sha256 = "sha256-Y5K4cM0BjsDGRda7uRjWqg7sqMYmdLqu4whi1raGWxU=";
+          version = "0.38.0";
+          sha256 = "qZ0WbM87EW87ntI7m3C6JBVkCpyXjzqqE/rUnFj0llw=";
         };
-        patches = [
-          (pkgs.fetchurl {
-            url = "https://git.m-labs.hk/M-Labs/nix-scripts/raw/branch/master/artiq-fast/pkgs/llvmlite-abiname.diff";
-            sha256 = "1zlss9vlhjgch6gf5gc0647kkjdwjk0833ld88xwd9vmwvkdmp3v";
-          })
-          (pkgs.fetchurl {
-            url = "https://git.m-labs.hk/M-Labs/nix-scripts/raw/branch/master/artiq-fast/pkgs/llvmlite-callsite.diff";
-            sha256 = "sha256-JrIXPnI7E7Y5NIFxswVBmRfQvv61lqKDDnNJrr+nDCg=";
-          })
-        ];
         nativeBuildInputs = [ pkgs.llvm_11 ];
         # Disable static linking
         # https://github.com/numba/llvmlite/issues/93
@@ -157,7 +148,10 @@
         nativeBuildInputs = [ pkgs.qt5.wrapQtAppsHook ];
         # keep llvm_x and lld_x in sync with llvmlite
         propagatedBuildInputs = [ pkgs.llvm_11 pkgs.lld_11 llvmlite-new sipyco.packages.x86_64-linux.sipyco pythonparser artiq-comtools.packages.x86_64-linux.artiq-comtools ]
-          ++ (with pkgs.python3Packages; [ pyqtgraph pygit2 numpy dateutil scipy prettytable pyserial python-Levenshtein h5py pyqt5 qasync ]);
+          ++ (with pkgs.python3Packages; [
+                pyqtgraph pygit2 numpy dateutil scipy prettytable pyserial python-Levenshtein h5py pyqt5 qasync tqdm
+                python-json-logger opentelemetry-api
+              ]);
 
         dontWrapQtApps = true;
         postFixup = ''
@@ -200,6 +194,19 @@
           sha256 = "0yzkka9jk3612v8gx748x6ziwykq5lr7zmr9wzkcls0v2yilqx9k";
         };
         propagatedBuildInputs = [ pkgs.python3Packages.pyserial ];
+      };
+
+      opentelemetry-api = pkgs.python3Packages.buildPythonPackage rec {
+        pname = "opentelemetry-api";
+        version = "1.11.1";
+        src = pkgs.fetchFromGitHub {
+          owner = "open-telemetry";
+          repo = "opentelemetry-python";
+          rev = "acaef9675e5e816f387c1eb2fa3c5c15581fc6ff";
+          sha256 = "a6DOnNgDQI0Vs9vqJgUcuMpLjec6hRAvavZjxnujYYA=";
+        } + "/opentelemetry-api";
+        propagatedBuildInputs = [ pkgs.python3Packages.deprecated pkgs.python3Packages.aiocontextvars ];
+        doCheck = false;
       };
 
       misoc = pkgs.python3Packages.buildPythonPackage {
@@ -255,7 +262,7 @@
       vivado = pkgs.buildFHSUserEnv {
         name = "vivado";
         targetPkgs = vivadoDeps;
-        profile = "source /opt/Xilinx/Vivado/2021.1/settings64.sh";
+        profile = "set -e; source /opt/Xilinx/Vivado/2021.2/settings64.sh";
         runScript = "vivado";
       };
 
@@ -263,10 +270,11 @@
         pkgs.stdenv.mkDerivation {
           name = "artiq-board-${target}-${variant}";
           phases = [ "buildPhase" "checkPhase" "installPhase" ];
-          cargoDeps = rustPlatform.fetchCargoTarball {
-            name = "artiq-firmware-cargo-deps";
-            src = "${self}/artiq/firmware";
-            sha256 = "sha256-YyycMsDzR+JRcMZJd6A/CRi2J9nKmaWY/KXUnAQaZ00=";
+          cargoDeps = rustPlatform.importCargoLock {
+            lockFile = ./artiq/firmware/Cargo.lock;
+            outputHashes = {
+              "fringe-1.2.1" = "sha256-m4rzttWXRlwx53LWYpaKuU5AZe4GSkbjHS6oINt5d3Y=";
+            };
           };
           nativeBuildInputs = [
             (pkgs.python3.withPackages(ps: [ ps.jsonschema  migen misoc artiq]))
@@ -279,7 +287,7 @@
             rustPlatform.cargoSetupHook
             cargo-xbuild
           ];
-          buildPhase = 
+          buildPhase =
             ''
             ARTIQ_PATH=`python -c "import artiq; print(artiq.__path__[0])"`
             ln -s $ARTIQ_PATH/firmware/Cargo.lock .
@@ -314,7 +322,7 @@
           dontFixup = true;
         };
 
-      openocd-bscanspi = let
+      openocd-bscanspi-f = pkgs: let
         bscan_spi_bitstreams-pkg = pkgs.stdenv.mkDerivation {
           name = "bscan_spi_bitstreams";
           src = pkgs.fetchFromGitHub {
@@ -340,7 +348,7 @@
             sha256 = "sha256-YgUsl4/FohfsOncM4uiz/3c6g2ZN4oZ0y5vV/2Skwqg=";
             fetchSubmodules = true;
           };
-          patches = oa.patches or [] ++ [
+          patches = [
             (pkgs.fetchurl {
               url = "https://git.m-labs.hk/M-Labs/nix-scripts/raw/commit/575ef05cd554c239e4cc8cb97ae4611db458a80d/artiq-fast/pkgs/openocd-jtagspi.diff";
               sha256 = "0g3crk8gby42gm661yxdcgapdi8sp050l5pb2d0yjfic7ns9cw81";
@@ -361,7 +369,7 @@
           sha256 = "sha256-ukZd3ajt0Sx3LByof4R80S31F5t1yo+L8QUADrMMm2A=";
         };
         buildInputs = [ pkgs.python3Packages.setuptools_scm ];
-        propagatedBuildInputs = [ pkgs.nodejs pkgs.nodePackages.wavedrom-cli ] ++ (with pkgs.python3Packages; [ wavedrom sphinx xcffib cairosvg ]);
+        propagatedBuildInputs = (with pkgs.python3Packages; [ wavedrom sphinx xcffib cairosvg ]);
       };
       latex-artiq-manual = pkgs.texlive.combine {
         inherit (pkgs.texlive)
@@ -371,8 +379,9 @@
       };
     in rec {
       packages.x86_64-linux = {
-        inherit pythonparser qasync openocd-bscanspi artiq;
+        inherit pythonparser qasync artiq;
         inherit migen misoc asyncserial microscope vivadoEnv vivado;
+        openocd-bscanspi = openocd-bscanspi-f pkgs;
         artiq-board-kc705-nist_clock = makeArtiqBoardPackage {
           target = "kc705";
           variant = "nist_clock";
@@ -436,6 +445,10 @@
           pkgs.llvmPackages_11.clang-unwrapped
           pkgs.llvm_11
           pkgs.lld_11
+          # To manually run compiler tests:
+          pkgs.lit
+          outputcheck
+          libartiq-support
           # use the vivado-env command to enter a FHS shell that lets you run the Vivado installer
           packages.x86_64-linux.vivadoEnv
           packages.x86_64-linux.vivado
@@ -443,6 +456,13 @@
           pkgs.python3Packages.sphinx pkgs.python3Packages.sphinx_rtd_theme
           pkgs.python3Packages.sphinx-argparse sphinxcontrib-wavedrom latex-artiq-manual
         ];
+        shellHook = ''
+          export LIBARTIQ_SUPPORT=`libartiq-support`
+        '';
+      };
+
+      packages.aarch64-linux = {
+        openocd-bscanspi = openocd-bscanspi-f pkgs-aarch64;
       };
 
       hydraJobs = {
@@ -450,8 +470,9 @@
         kc705-hitl = pkgs.stdenv.mkDerivation {
           name = "kc705-hitl";
 
-          # requires patched Nix
-          __networked = true;
+          __networked = true;  # compatibility with old patched Nix
+          # breaks hydra, https://github.com/NixOS/hydra/issues/1216
+          #__impure = true;     # Nix 2.8+
 
           buildInputs = [
             (pkgs.python3.withPackages(ps: with packages.x86_64-linux; [ artiq ps.paramiko ]))
@@ -468,7 +489,7 @@
             mkdir $HOME/.ssh
             cp /opt/hydra_id_ed25519 $HOME/.ssh/id_ed25519
             cp /opt/hydra_id_ed25519.pub $HOME/.ssh/id_ed25519.pub
-            echo "rpi-1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIPOBQVcsvk6WgRj18v4m0zkFeKrcN9gA+r6sxQxNwFpv" > $HOME/.ssh/known_hosts
+            echo "rpi-1 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIACtBFDVBYoAE4fpJCTANZSE0bcVpTR3uvfNvb80C4i5" > $HOME/.ssh/known_hosts
             chmod 600 $HOME/.ssh/id_ed25519
             LOCKCTL=$(mktemp -d)
             mkfifo $LOCKCTL/lockctl
@@ -504,8 +525,8 @@
     };
 
   nixConfig = {
-    binaryCachePublicKeys = ["nixbld.m-labs.hk-1:5aSRVA5b320xbNvu30tqxVPXpld73bhtOeH6uAjRyHc="];
-    binaryCaches = ["https://nixbld.m-labs.hk" "https://cache.nixos.org"];
-    sandboxPaths = ["/opt"];
+    extra-trusted-public-keys = "nixbld.m-labs.hk-1:5aSRVA5b320xbNvu30tqxVPXpld73bhtOeH6uAjRyHc=";
+    extra-substituters = "https://nixbld.m-labs.hk";
+    extra-sandbox-paths = "/opt";
   };
 }

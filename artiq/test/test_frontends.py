@@ -17,7 +17,7 @@ class TestFrontends(unittest.TestCase):
         """Test --help as a simple smoke test against catastrophic breakage."""
         commands = {
             "aqctl": [
-                "corelog"
+                "corelog", "moninj_proxy"
             ],
             "artiq": [
                 "client", "compile", "coreanalyzer", "coremgmt",

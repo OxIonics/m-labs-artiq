@@ -1,6 +1,7 @@
 import os, sys
 import numpy
 from opentelemetry import trace
+from functools import wraps
 
 from pythonparser import diagnostic
 
@@ -121,15 +122,64 @@ class Core:
         except diagnostic.Error as error:
             raise CompileError(error.diagnostic) from error
 
+    def _run_compiled(self, kernel_library, embedding_map, symbolizer, demangler, function_name: str):
+        with trace.get_tracer(__name__).start_as_current_span(
+                "run-kernel",
+                attributes={"function": function_name},
+        ):
+            if self.first_run:
+                self.comm.check_system_info()
+                self.first_run = False
+
+            self.comm.load(kernel_library)
+            self.comm.run()
+            self.comm.serve(embedding_map, symbolizer, demangler)
+
     def run(self, function, args, kwargs):
         result = None
         @rpc(flags={"async"})
         def set_result(new_result):
             nonlocal result
             result = new_result
+        embedding_map, kernel_library, symbolizer, demangler = \
+            self.compile(function, args, kwargs, set_result)
+        self._run_compiled(kernel_library, embedding_map, symbolizer, demangler, function.__name__)
+        return result
 
-        tracer = trace.get_tracer(__name__)
-        with tracer.start_as_current_span(
+    def precompile(self, function, *args, **kwargs):
+        """Precompile a kernel and return a callable that executes it on the core device
+        at a later time.
+
+        Arguments to the kernel are set at compilation time and passed to this function,
+        as additional positional and keyword arguments.
+        The returned callable accepts no arguments.
+
+        Precompiled kernels may use RPCs.
+
+        Object attributes at the beginning of a precompiled kernel execution have the
+        values they had at precompilation time. If up-to-date values are required,
+        use RPC to read them.
+        Similarly, modified values are not written back, and explicit RPC should be used
+        to modify host objects.
+        Carefully review the source code of drivers calls used in precompiled kernels, as
+        they may rely on host object attributes being transfered between kernel calls.
+        Examples include code used to control DDS phase, and Urukul RF switch control
+        via the CPLD register.
+
+        The return value of the callable is the return value of the kernel, if any.
+
+        The callable may be called several times.
+        """
+        if not hasattr(function, "artiq_embedded"):
+            raise ValueError("Argument is not a kernel")
+
+        result = None
+        @rpc(flags={"async"})
+        def set_result(new_result):
+            nonlocal result
+            result = new_result
+
+        with trace.get_tracer(__name__).start_as_current_span(
             "artiq-compile",
             attributes={
                 "function": function.__qualname__,
@@ -137,21 +187,15 @@ class Core:
             },
         ):
             embedding_map, kernel_library, symbolizer, demangler = \
-                self.compile(function, args, kwargs, set_result)
+                self.compile(function, args, kwargs, set_result, attribute_writeback=False)
 
-        if self.first_run:
-            self.comm.check_system_info()
-            self.first_run = False
+        @wraps(function)
+        def run_precompiled():
+            nonlocal result
+            self._run_compiled(kernel_library, embedding_map, symbolizer, demangler, function.__name__)
+            return result
 
-        with tracer.start_as_current_span(
-                "run-kernel",
-                attributes={"function": function.__name__},
-        ):
-            self.comm.load(kernel_library)
-            self.comm.run()
-            self.comm.serve(embedding_map, symbolizer, demangler)
-
-        return result
+        return run_precompiled
 
     @portable
     def seconds_to_mu(self, seconds):

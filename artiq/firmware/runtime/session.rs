@@ -418,7 +418,7 @@ fn process_kern_message(io: &Io, aux_mutex: &Mutex,
                 kern_send(io, &kern::CacheGetReply {
                     // Zing! This transmute is only safe because we dynamically track
                     // whether the kernel has borrowed any values from the cache.
-                    value: unsafe { mem::transmute::<*const [i32], &'static [i32]>(value) }
+                    value: unsafe { mem::transmute(value) }
                 })
             }
 
@@ -529,7 +529,7 @@ fn flash_kernel_worker(io: &Io, aux_mutex: &Mutex,
 
     config::read(config_key, |result| {
         match result {
-            Ok(kernel) if kernel.len() > 0 => unsafe {
+            Ok(kernel) => unsafe {
                 // kernel CPU cannot access the SPI flash address space directly,
                 // so make a copy.
                 kern_load(io, &mut session, Vec::from(kernel).as_ref())
@@ -650,6 +650,7 @@ pub fn thread(io: Io, aux_mutex: &Mutex,
                         error!("session aborted: {}", err);
                     }
                 }
+                stream.close().expect("session: close socket");
             });
         }
 

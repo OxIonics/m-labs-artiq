@@ -71,7 +71,7 @@ class ZoomIconView(QtWidgets.QListView):
         self._char_width = QtGui.QFontMetrics(self.font()).averageCharWidth()
         self.setViewMode(self.IconMode)
         w = self._char_width*self.default_size
-        self.setIconSize(QtCore.QSize(w, w*self.aspect))
+        self.setIconSize(QtCore.QSize(w, int(w*self.aspect)))
         self.setFlow(self.LeftToRight)
         self.setResizeMode(self.Adjust)
         self.setWrapping(True)
@@ -107,7 +107,7 @@ class Hdf5FileSystemModel(QtWidgets.QFileSystemModel):
                     v = ("artiq_version: {}\nrepo_rev: {}\nfile: {}\n"
                          "class_name: {}\nrid: {}\nstart_time: {}").format(
                              h5["artiq_version"][()], expid["repo_rev"],
-                             expid["file"], expid["class_name"],
+                             expid.get("file", "<none>"), expid["class_name"],
                              h5["rid"][()], start_time)
                     return v
                 except:
@@ -179,7 +179,7 @@ class FilesDock(QtWidgets.QDockWidget):
                 v = {
                     "artiq_version": f["artiq_version"][()],
                     "repo_rev": expid["repo_rev"],
-                    "file": expid["file"],
+                    "file": expid.get("file", "<none>"),
                     "class_name": expid["class_name"],
                     "rid": f["rid"][()],
                     "start_time": start_time,
@@ -188,17 +188,27 @@ class FilesDock(QtWidgets.QDockWidget):
             except:
                 logger.warning("unable to read metadata from %s",
                                info.filePath(), exc_info=True)
-            rd = dict()
+
+            rd = {}
             if "archive" in f:
-                rd = {k: (True, v[()]) for k, v in f["archive"].items()}
+                def visitor(k, v):
+                    if isinstance(v, h5py.Dataset):
+                        rd[k] = (True, v[()])
+
+                f["archive"].visititems(visitor)
+
             if "datasets" in f:
-                for k, v in f["datasets"].items():
-                    if k in rd:
-                        logger.warning("dataset '%s' is both in archive and "
-                                       "outputs", k)
-                    rd[k] = (True, v[()])
-            if rd:
-                self.datasets.init(rd)
+                def visitor(k, v):
+                    if isinstance(v, h5py.Dataset):
+                        if k in rd:
+                            logger.warning("dataset '%s' is both in archive "
+                                           "and outputs", k)
+                        rd[k] = (True, v[()])
+
+                f["datasets"].visititems(visitor)
+
+            self.datasets.init(rd)
+
         self.dataset_changed.emit(info.filePath())
 
     def list_activated(self, idx):

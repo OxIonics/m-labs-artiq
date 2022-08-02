@@ -10,7 +10,7 @@ from sipyco.sync_struct import Publisher
 from sipyco.logging_tools import Server as LoggingServer
 from sipyco.broadcast import Broadcaster
 from sipyco import common_args
-from sipyco.asyncio_tools import atexit_register_coroutine
+from sipyco.asyncio_tools import atexit_register_coroutine, SignalHandler
 
 from artiq import __version__ as artiq_version
 from artiq.consts import CONTROL_PORT, NOTIFY_PORT, WORKER_MANAGER_PORT
@@ -62,12 +62,13 @@ def get_argparser():
         "--experiment-subdir", default="",
         help=("path to the experiment folder from the repository root "
               "(default: '%(default)s')"))
-
     log_args(parser)
 
     parser.add_argument("--name",
         help="friendly name, displayed in dashboards "
              "to identify master instead of server address")
+    parser.add_argument("--log-submissions", default=None,
+        help="set the filename to create the experiment subimission")
 
     return parser
 
@@ -83,8 +84,12 @@ class MasterConfig:
 def main():
     args = get_argparser().parse_args()
     log_forwarder = init_log(args)
-    loop = asyncio.get_event_loop()
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
     atexit.register(loop.close)
+    signal_handler = SignalHandler()
+    signal_handler.setup()
+    atexit.register(signal_handler.teardown)
     bind = common_args.bind_address_from_args(args)
 
     server_broadcast = Broadcaster()
@@ -130,7 +135,7 @@ def main():
 
     scheduler = Scheduler(
         RIDCounter(), worker_handlers, experiment_db,
-        dataset_namespaces,
+        dataset_namespaces, args.log_submissions,
     )
     scheduler.start()
     atexit_register_coroutine(scheduler.stop)
@@ -147,6 +152,7 @@ def main():
         "scheduler_request_termination": scheduler.request_termination,
         "scheduler_get_status": scheduler.get_status,
         "scheduler_check_pause": scheduler.check_pause,
+        "scheduler_check_termination": scheduler.check_termination,
         "ccb_issue": ccb_issue,
         "store_results": result_store.store,
     })
@@ -185,7 +191,7 @@ def main():
     atexit_register_coroutine(server_logging.stop)
 
     print("ARTIQ master is now ready.")
-    loop.run_forever()
+    loop.run_until_complete(signal_handler.wait_terminate())
 
 if __name__ == "__main__":
     main()

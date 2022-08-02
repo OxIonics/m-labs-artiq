@@ -3,7 +3,7 @@ from migen.build.generic_platform import *
 from migen.genlib.io import DifferentialOutput
 
 from artiq.gateware import rtio
-from artiq.gateware.rtio.phy import spi2, ad53xx_monitor, grabber
+from artiq.gateware.rtio.phy import spi2, ad53xx_monitor, dds, grabber
 from artiq.gateware.suservo import servo, pads as servo_pads
 from artiq.gateware.rtio.phy import servo as rtservo, fastino, phaser
 from artiq.gateware.rtio.phy import ttl_simple
@@ -64,6 +64,65 @@ class DIO(_EEM):
 
         if edge_counter_cls is not None:
             for phy in phys:
+                state = getattr(phy, "input_state", None)
+                if state is not None:
+                    counter = edge_counter_cls(state)
+                    target.submodules += counter
+                    target.rtio_channels.append(rtio.Channel.from_phy(counter))
+
+
+class DIO_SPI(_EEM):
+    @staticmethod
+    def io(eem, spi, ttl, iostandard):
+        def spi_subsignals(clk, mosi, miso, cs, pol):
+            signals = [Subsignal("clk", Pins(_eem_pin(eem, clk, pol)))]
+            if mosi is not None:
+                signals.append(Subsignal("mosi",
+                                         Pins(_eem_pin(eem, mosi, pol))))
+            if miso is not None:
+                signals.append(Subsignal("miso",
+                                         Pins(_eem_pin(eem, miso, pol))))
+            if cs:
+                signals.append(Subsignal("cs_n", Pins(
+                    *(_eem_pin(eem, pin, pol) for pin in cs))))
+            return signals
+
+        spi = [
+            ("dio{}_spi{}_{}".format(eem, i, pol), i,
+             *spi_subsignals(clk, mosi, miso, cs, pol),
+             iostandard(eem))
+            for i, (clk, mosi, miso, cs) in enumerate(spi) for pol in "pn"
+        ]
+        ttl = [
+            ("dio{}".format(eem), i,
+             Subsignal("p", Pins(_eem_pin(eem, pin, "p"))),
+             Subsignal("n", Pins(_eem_pin(eem, pin, "n"))),
+             iostandard(eem))
+            for i, (pin, _, _) in enumerate(ttl)
+        ]
+        return spi + ttl
+
+    @classmethod
+    def add_std(cls, target, eem, spi, ttl, iostandard=default_iostandard):
+        cls.add_extension(target, eem, spi, ttl, iostandard=iostandard)
+
+        for i in range(len(spi)):
+            phy = spi2.SPIMaster(
+                target.platform.request("dio{}_spi{}_p".format(eem, i)),
+                target.platform.request("dio{}_spi{}_n".format(eem, i))
+            )
+            target.submodules += phy
+            target.rtio_channels.append(
+                rtio.Channel.from_phy(phy, ififo_depth=4))
+
+        dci = iostandard(eem).name == "LVDS"
+        for i, (_, ttl_cls, edge_counter_cls) in enumerate(ttl):
+            pads = target.platform.request("dio{}".format(eem), i)
+            phy = ttl_cls(pads.p, pads.n, dci=dci)
+            target.submodules += phy
+            target.rtio_channels.append(rtio.Channel.from_phy(phy))
+
+            if edge_counter_cls is not None:
                 state = getattr(phy, "input_state", None)
                 if state is not None:
                     counter = edge_counter_cls(state)
@@ -164,26 +223,29 @@ class Urukul(_EEM):
         return ios
 
     @classmethod
-    def add_std(cls, target, eem, eem_aux, ttl_out_cls, sync_gen_cls=None, iostandard=default_iostandard):
+    def add_std(cls, target, eem, eem_aux, ttl_out_cls, dds_type, sync_gen_cls=None, iostandard=default_iostandard):
         cls.add_extension(target, eem, eem_aux, iostandard=iostandard)
 
-        phy = spi2.SPIMaster(target.platform.request("urukul{}_spi_p".format(eem)),
+        spi_phy = spi2.SPIMaster(target.platform.request("urukul{}_spi_p".format(eem)),
             target.platform.request("urukul{}_spi_n".format(eem)))
-        target.submodules += phy
-        target.rtio_channels.append(rtio.Channel.from_phy(phy, ififo_depth=4))
+        target.submodules += spi_phy
+        target.rtio_channels.append(rtio.Channel.from_phy(spi_phy, ififo_depth=4))
 
         pads = target.platform.request("urukul{}_dds_reset_sync_in".format(eem))
-        pad = Signal(reset=0)
-        target.specials += DifferentialOutput(pad, pads.p, pads.n)
         if sync_gen_cls is not None:  # AD9910 variant and SYNC_IN from EEM
-            phy = sync_gen_cls(pad, ftw_width=4)
+            phy = sync_gen_cls(pad=pads.p, pad_n=pads.n, ftw_width=4)
             target.submodules += phy
             target.rtio_channels.append(rtio.Channel.from_phy(phy))
 
         pads = target.platform.request("urukul{}_io_update".format(eem))
-        phy = ttl_out_cls(pads.p, pads.n)
-        target.submodules += phy
-        target.rtio_channels.append(rtio.Channel.from_phy(phy))
+        io_upd_phy = ttl_out_cls(pads.p, pads.n)
+        target.submodules += io_upd_phy
+        target.rtio_channels.append(rtio.Channel.from_phy(io_upd_phy))
+
+        dds_monitor = dds.UrukulMonitor(spi_phy, io_upd_phy, dds_type)
+        target.submodules += dds_monitor
+        spi_phy.probes.extend(dds_monitor.probes)
+
         if eem_aux is not None:
             for signal in "sw0 sw1 sw2 sw3".split():
                 pads = target.platform.request("urukul{}_{}".format(eem, signal))
