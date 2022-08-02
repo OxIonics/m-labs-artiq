@@ -909,7 +909,7 @@ class ExperimentManager:
             else:
                 repo_match = "repo_rev" not in expid
             if (repo_match and
-                    ("file" in expid and expid["file"] == file) and
+                    ("file" in expid and expid["file"] == exp.file) and
                     expid["class_name"] == exp.class_name and
                     expid["worker_manager_id"] == exp.worker_manager_id):
                 rids.append(rid)

@@ -168,9 +168,9 @@
         ];
 
         # FIXME: automatically propagate lld_11 llvm_11 dependencies
-        checkInputs = [ pkgs.lld_11 pkgs.llvm_11 libartiq-support pkgs.lit outputcheck ];
+        checkInputs = [ pkgs.lld_11 pkgs.llvm_11 libartiq-support pkgs.lit pkgs.python3Packages.pytest outputcheck ];
         checkPhase = ''
-          python -m unittest discover -v artiq.test
+          python -m pytest -v artiq/test
 
           TESTDIR=`mktemp -d`
           cp --no-preserve=mode,ownership -R $src/artiq/test/lit $TESTDIR
