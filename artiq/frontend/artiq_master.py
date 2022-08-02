@@ -15,7 +15,7 @@ from sipyco.asyncio_tools import atexit_register_coroutine, SignalHandler
 from artiq import __version__ as artiq_version
 from artiq.consts import CONTROL_PORT, NOTIFY_PORT, WORKER_MANAGER_PORT
 from artiq.master.log import log_args, init_log
-from artiq.master.databases import DeviceDB, DatasetDB, DatasetNamespaces
+from artiq.master.databases import DeviceDB, DatasetDB
 from artiq.master.results import ResultStore
 from artiq.master.scheduler import Scheduler
 from artiq.master.rid_counter import RIDCounter
@@ -114,9 +114,6 @@ def main():
 
     result_store = ResultStore(args.results_root)
 
-    dataset_namespaces = DatasetNamespaces(dataset_db)
-    atexit_register_coroutine(dataset_namespaces.stop)
-
     worker_handlers = dict()
     worker_manager_db = loop.run_until_complete(
         WorkerManagerDB.create(bind, args.port_worker_manager)
@@ -135,7 +132,7 @@ def main():
 
     scheduler = Scheduler(
         RIDCounter(), worker_handlers, experiment_db,
-        dataset_namespaces, args.log_submissions,
+        args.log_submissions,
     )
     scheduler.start()
     atexit_register_coroutine(scheduler.stop)
@@ -180,7 +177,6 @@ def main():
         "all_explist_status": experiment_db.all_status,
         "worker_managers": worker_manager_db.notifier,
     })
-    dataset_namespaces.set_publisher(server_notify)
     loop.run_until_complete(server_notify.start(
         bind, args.port_notify))
     atexit_register_coroutine(server_notify.stop)

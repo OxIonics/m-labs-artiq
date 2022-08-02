@@ -64,16 +64,7 @@ class Run:
         self.due_date = due_date
         self.flush = flush
 
-        # Update datasets through rid namespace.
-        handlers = pool.worker_handlers
-        namespaces = pool.dataset_namespaces
-        if namespaces:
-            namespaces.init_rid(rid)
-            handlers = {
-                **handlers,
-                "update_dataset": partial(namespaces.update_rid_namespace, rid)
-            }
-        self.worker = Worker(handlers, worker_transport)
+        self.worker = Worker(pool.worker_handlers, worker_transport)
 
         self.termination_requested = False
 
@@ -129,7 +120,7 @@ class Run:
 
 
 class RunPool:
-    def __init__(self, ridc, worker_handlers, notifier, experiment_db, dataset_namespaces, log_submissions):
+    def __init__(self, ridc, worker_handlers, notifier, experiment_db, log_submissions):
         self.runs = dict()
         self.state_changed = Condition()
 
@@ -137,7 +128,6 @@ class RunPool:
         self.worker_handlers = worker_handlers
         self.notifier = notifier
         self.experiment_db: ExperimentDB = experiment_db
-        self.dataset_namespaces = dataset_namespaces
         self.log_submissions = log_submissions
 
     def submit(self, expid, priority, due_date, flush, pipeline_name):
@@ -478,9 +468,9 @@ class AnalyzeStage(TaskObject):
 
 class Pipeline:
     def __init__(self, ridc, deleter, worker_handlers, notifier, experiment_db,
-                 dataset_namespaces, log_submissions):
+                 log_submissions):
         self.pool = RunPool(ridc, worker_handlers, notifier, experiment_db,
-                            dataset_namespaces, log_submissions)
+                            log_submissions)
         self._prepare = PrepareStage(self.pool, deleter.delete)
         self._run = RunStage(self.pool, deleter.delete)
         self._analyze = AnalyzeStage(self.pool, deleter.delete)
@@ -503,9 +493,8 @@ class Deleter(TaskObject):
     :meth:`RunPool.delete` is an async function (it needs to close the worker
     connection, etc.), so we maintain a queue of RIDs to delete on a background task.
     """
-    def __init__(self, pipelines, dataset_namespaces):
+    def __init__(self, pipelines):
         self._pipelines = pipelines
-        self._dataset_namespaces = dataset_namespaces
         self._queue = asyncio.Queue()
 
     def delete(self, rid):
@@ -530,8 +519,6 @@ class Deleter(TaskObject):
             if rid in pipeline.pool.runs:
                 logger.debug("deleting RID %d...", rid)
                 await pipeline.pool.delete(rid)
-                if self._dataset_namespaces:
-                    self._dataset_namespaces.finish_rid(rid)
                 logger.debug("deletion of RID %d completed", rid)
                 break
 
@@ -559,7 +546,6 @@ class Scheduler:
             ridc,
             worker_handlers,
             experiment_db,
-            dataset_namespaces,
             log_submissions,
     ):
         self.notifier = Notifier(dict())
@@ -567,11 +553,10 @@ class Scheduler:
         self._pipelines = dict()
         self._worker_handlers = worker_handlers
         self._experiment_db = experiment_db
-        self._dataset_namespaces = dataset_namespaces
         self._terminated = False
 
         self._ridc = ridc
-        self._deleter = Deleter(self._pipelines, dataset_namespaces)
+        self._deleter = Deleter(self._pipelines)
         self._log_submissions = log_submissions
 
     def start(self):
@@ -603,8 +588,7 @@ class Scheduler:
             logger.debug("creating pipeline '%s'", pipeline_name)
             pipeline = Pipeline(self._ridc, self._deleter,
                                 self._worker_handlers, self.notifier,
-                                self._experiment_db, self._dataset_namespaces,
-                                self._log_submissions)
+                                self._experiment_db, self._log_submissions)
             self._pipelines[pipeline_name] = pipeline
             pipeline.start()
         return pipeline.pool.submit(

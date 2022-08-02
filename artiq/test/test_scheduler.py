@@ -149,7 +149,7 @@ class SchedulerCase(unittest.TestCase):
     def make_scheduler(self, handlers=None):
         if handlers is None:
             handlers = DUMMY_WORKER_HANDLERS
-        return Scheduler(_RIDCounter(0), handlers, DummyExperimentDB(), None, None)
+        return Scheduler(_RIDCounter(0), handlers, DummyExperimentDB(), None)
 
     def test_steps(self):
         loop = self.loop
