@@ -140,13 +140,16 @@ class Core:
                 "run-kernel",
                 attributes={"function": function_name},
         ):
-            if self.first_run:
-                self.comm.check_system_info()
-                self.first_run = False
+            self._run_compiled_impl(kernel_library, embedding_map, symbolizer, demangler)
 
-            self.comm.load(kernel_library)
-            self.comm.run()
-            self.comm.serve(embedding_map, symbolizer, demangler)
+    def _run_compiled_impl(self, kernel_library, embedding_map, symbolizer, demangler):
+        if self.first_run:
+            self.comm.check_system_info()
+            self.first_run = False
+
+        self.comm.load(kernel_library)
+        self.comm.run()
+        self.comm.serve(embedding_map, symbolizer, demangler)
 
     def run(self, function, args, kwargs):
         result = None

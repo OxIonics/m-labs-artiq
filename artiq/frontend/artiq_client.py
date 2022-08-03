@@ -344,14 +344,8 @@ async def _submit(args):
         else:
             worker_manager_id = None
 
-        if worker_manager_id is None:
-            file = args.file
-        else:
-            file = abspath(args.file)
-
         expid = {
             "log_level": logging.WARNING + args.quiet*10 - args.verbose*10,
-            "file": file,
             "class_name": args.class_name,
             "arguments": arguments,
             "worker_manager_id": worker_manager_id,
@@ -362,7 +356,11 @@ async def _submit(args):
             if args.repository:
                 raise ValueError("Repository cannot be used when submitting by content")
         else:
-            expid["file"] = args.file
+            if worker_manager_id is None:
+                expid["file"] = args.file
+            else:
+                expid["file"] = abspath(args.file)
+
             if args.repository:
                 expid["repo_rev"] = args.revision
         if args.timed is None:
