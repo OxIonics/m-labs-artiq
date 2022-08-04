@@ -342,7 +342,7 @@ class WorkerManager:
                 })
         elif action == "close_worker":
             worker_id = obj["worker_id"]
-            log.info(f"Closing worker {worker_id}")
+            log.debug(f"Closing worker {worker_id}")
             worker = self._workers[worker_id]
             worker.closing = True
             await self._close_worker(
@@ -415,7 +415,7 @@ class WorkerManager:
                 "msg": "Worker exited unexpectedly"
             })
         else:
-            log.info(f"Worker {worker_id} exited")
+            log.debug(f"Worker {worker_id} exited")
 
     def _make_log_forwarder(self, worker_id, forward_action):
         log_parser = LogParser(lambda: worker_id)
@@ -436,7 +436,7 @@ class WorkerManager:
 
     async def _create_worker(self, obj):
         worker_id = obj["worker_id"]
-        log.info(f"Creating worker {worker_id}")
+        log.debug(f"Creating worker {worker_id}")
         worker = self._transport_factory()
         await worker.create(
             obj["rid"], obj["log_level"],
@@ -449,7 +449,7 @@ class WorkerManager:
         self._workers[worker_id] = _WorkerState(
             worker, msg_task,
         )
-        log.info(f"Created worker {worker_id}")
+        log.debug(f"Created worker {worker_id}")
         await self._send({
             "action": "worker_created",
             "worker_id": worker_id
