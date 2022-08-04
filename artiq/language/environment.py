@@ -239,7 +239,9 @@ class HasEnvironment:
     devices, datasets)."""
     def __init__(self, managers_or_parent, *args, **kwargs):
         self.children = []
-        if isinstance(managers_or_parent, tuple):
+
+        is_root = isinstance(managers_or_parent, tuple)
+        if is_root:
             self.__device_mgr = managers_or_parent[0]
             self.__dataset_mgr = managers_or_parent[1]
             self.__argument_mgr = managers_or_parent[2]
@@ -254,7 +256,7 @@ class HasEnvironment:
         self.__in_build = True
         self.build(*args, **kwargs)
         self.__in_build = False
-        if self.__argument_mgr is not None:
+        if is_root and self.__argument_mgr is not None:
             self.__argument_mgr.check_unprocessed_arguments()
 
     def register_child(self, child):
