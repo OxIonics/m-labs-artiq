@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from inspect import isclass
+import logging
 
 from sipyco import pyon
 
@@ -12,6 +13,8 @@ __all__ = ["NoDefault", "DefaultMissing",
            "NumberValue", "StringValue",
            "HasEnvironment", "Experiment", "EnvExperiment"]
 
+
+logger = logging.getLogger(__name__)
 
 class NoDefault:
     """Represents the absence of a default value."""
@@ -229,8 +232,7 @@ class ProcessArgumentManager:
         unprocessed = set(self.unprocessed_arguments.keys()) -\
                       self._processed_arguments
         if unprocessed:
-            raise AttributeError("Invalid argument(s): " +
-                                 ", ".join(unprocessed))
+            logging.warn("Invalid argument(s): %s", ", ".join(unprocessed))
 
 class HasEnvironment:
     """Provides methods to manage the environment of an experiment (arguments,
