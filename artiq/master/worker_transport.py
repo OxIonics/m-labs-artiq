@@ -75,7 +75,7 @@ class PipeWorkerTransport(WorkerTransport):
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
             env=env, start_new_session=True)
         self.ipc = ipc
-        logger.info(f"Created worker process pid={ipc.process.pid} (RID {rid})")
+        logger.debug(f"Created worker process pid={ipc.process.pid} (RID {rid})")
         self._stdout_task = asyncio.create_task(
             _output_process(ipc.process.stdout, stdout_handler)
         )

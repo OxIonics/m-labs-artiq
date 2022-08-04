@@ -845,7 +845,7 @@ class ExperimentManager:
 
     async def _submit_task(self, expurl, *args):
         rid = await self.schedule_ctl.submit(*args)
-        logger.info("Submitted '%s', RID is %d", expurl, rid)
+        logger.debug("Submitted '%s', RID is %d", expurl, rid)
 
     def submit(self, expurl):
         exp = self.resolve_expurl(expurl)

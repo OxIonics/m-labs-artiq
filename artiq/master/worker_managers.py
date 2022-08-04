@@ -421,7 +421,7 @@ class WorkerManagerProxy:
         })
         await self._writer.drain()
         await state.created
-        log.info(f"Created worker {worker_id} on manager {self._id} (RID {rid})")
+        log.debug(f"Created worker {worker_id} on manager {self._id} (RID {rid})")
 
     async def worker_msg(self, worker_id, msg: str):
         await self._send({
