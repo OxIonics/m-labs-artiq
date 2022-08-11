@@ -197,7 +197,7 @@ async def run_experiment(
         def worker_managers_cb(mod, data):
             log.debug(f"Got available worker manager update {summarise_mod(mod)}")
 
-            if worker_manager_id in data:
+            if worker_manager_id in data and not connected.done():
                 connected.set_result(None)
 
         (
