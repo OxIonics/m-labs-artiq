@@ -372,7 +372,7 @@ checksum = "388a1df253eca08550bef6c72392cfe7c30914bf41df5269b68cbd6ff8f570a3"
 [[package]]
 name = "smoltcp"
 version = "0.8.1"
-source = "git+https://github.com/SquidDev/smoltcp?branch=v0.8.x#4238e56aa5e0d68ee5653bbcd05b9bf7836b3fb0"
+source = "git+https://github.com/OxIonics/smoltcp?branch=v0.8.x#bff95fbd703f420d07e9ef2783459c63b324a5f1"
 dependencies = [
  "bitflags",
  "byteorder",

@@ -7,4 +7,4 @@ lto = true
 debug = 2
 
 [patch.crates-io]
-smoltcp = { git = "https://github.com/SquidDev/smoltcp", branch = "v0.8.x" }
+smoltcp = { git = "https://github.com/OxIonics/smoltcp", branch = "v0.8.x" }
