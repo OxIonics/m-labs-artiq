@@ -30,13 +30,20 @@ def process_header(output, description):
                 "type": "local",
                 "module": "artiq.coredevice.core",
                 "class": "Core",
-                "arguments": {{"host": core_addr, "ref_period": {ref_period},  "target": "{cpu_target}"}},
+                "arguments": {{"host": core_addr, "ref_period": {ref_period}, "target": "{cpu_target}"}},
             }},
             "core_log": {{
                 "type": "controller",
                 "host": "::1",
                 "port": 1068,
                 "command": "aqctl_corelog -p {{port}} --bind {{bind}} " + core_addr
+            }},
+            "core_moninj": {{
+                "type": "controller",
+                "host": "::1",
+                "port_proxy": 1383,
+                "port": 1384,
+                "command": "aqctl_moninj_proxy --port-proxy {{port_proxy}} --port-control {{port}} --bind {{bind}} " + core_addr
             }},
             "core_cache": {{
                 "type": "local",
@@ -52,13 +59,13 @@ def process_header(output, description):
             "i2c_switch0": {{
                 "type": "local",
                 "module": "artiq.coredevice.i2c",
-                "class": "PCA9548",
+                "class": "I2CSwitch",
                 "arguments": {{"address": 0xe0}}
             }},
             "i2c_switch1": {{
                 "type": "local",
                 "module": "artiq.coredevice.i2c",
-                "class": "PCA9548",
+                "class": "I2CSwitch",
                 "arguments": {{"address": 0xe2}}
             }},
         }}
@@ -87,7 +94,8 @@ class PeripheralManager:
     def process_dio(self, rtio_offset, peripheral, num_channels=8):
         class_names = {
             "input": "TTLInOut",
-            "output": "TTLOut"
+            "output": "TTLOut",
+            "clkgen": "TTLClockGen"
         }
         classes = [
             class_names[peripheral["bank_direction_low"]],
@@ -102,8 +110,7 @@ class PeripheralManager:
                     "module": "artiq.coredevice.ttl",
                     "class": "{class_name}",
                     "arguments": {{"channel": 0x{channel:06x}}},
-                }}
-                """,
+                }}""",
                      name=name[i],
                      class_name=classes[i // 4],
                      channel=rtio_offset + next(channel))
@@ -117,10 +124,49 @@ class PeripheralManager:
                             "module": "artiq.coredevice.edge_counter",
                             "class": "EdgeCounter",
                             "arguments": {{"channel": 0x{channel:06x}}},
-                        }}
-                        """,
+                        }}""",
                              name=name[i],
                              channel=rtio_offset + next(channel))
+        return next(channel)
+
+    def process_dio_spi(self, rtio_offset, peripheral):
+        channel = count(0)
+        for spi in peripheral["spi"]:
+            self.gen("""
+                        device_db["{name}"] = {{
+                            "type": "local",
+                            "module": "artiq.coredevice.spi2",
+                            "class": "SPIMaster",
+                            "arguments": {{"channel": 0x{channel:06x}}}
+                        }}""",
+                     name=self.get_name(spi.get("name", "dio_spi")),
+                     channel=rtio_offset + next(channel))
+        for ttl in peripheral.get("ttl", []):
+            ttl_class_names = {
+                "input": "TTLInOut",
+                "output": "TTLOut"
+            }
+            name = self.get_name(ttl.get("name", "ttl"))
+            self.gen("""
+                device_db["{name}"] = {{
+                    "type": "local",
+                    "module": "artiq.coredevice.ttl",
+                    "class": "{class_name}",
+                    "arguments": {{"channel": 0x{channel:06x}}},
+                }}""",
+                     name=name,
+                     class_name=ttl_class_names[ttl["direction"]],
+                     channel=rtio_offset + next(channel))
+            if ttl.get("edge_counter", False):
+                self.gen("""
+                    device_db["{name}_counter"] = {{
+                        "type": "local",
+                        "module": "artiq.coredevice.edge_counter",
+                        "class": "EdgeCounter",
+                        "arguments": {{"channel": 0x{channel:06x}}},
+                    }}""",
+                         name=name,
+                         channel=rtio_offset + next(channel))
         return next(channel)
 
     def process_urukul(self, rtio_offset, peripheral):
@@ -128,14 +174,14 @@ class PeripheralManager:
         synchronization = peripheral["synchronization"]
         channel = count(0)
         self.gen("""
-            device_db["eeprom_{name}"]={{
+            device_db["eeprom_{name}"] = {{
                 "type": "local",
                 "module": "artiq.coredevice.kasli_i2c",
                 "class": "KasliEEPROM",
                 "arguments": {{"port": "EEM{eem}"}}
             }}
 
-            device_db["spi_{name}"]={{
+            device_db["spi_{name}"] = {{
                 "type": "local",
                 "module": "artiq.coredevice.spi2",
                 "class": "SPIMaster",

@@ -5,7 +5,8 @@ from artiq.gateware.rtio.phy import ttl_simple, ttl_serdes_7series, edge_counter
 def peripheral_dio(module, peripheral, **kwargs):
     ttl_classes = {
         "input": ttl_serdes_7series.InOut_8X,
-        "output": ttl_serdes_7series.Output_8X
+        "output": ttl_serdes_7series.Output_8X,
+        "clkgen": ttl_simple.ClockGen
     }
     if len(peripheral["ports"]) != 1:
         raise ValueError("wrong number of ports")
@@ -17,6 +18,21 @@ def peripheral_dio(module, peripheral, **kwargs):
         ttl_classes[peripheral["bank_direction_low"]],
         ttl_classes[peripheral["bank_direction_high"]],
         edge_counter_cls=edge_counter_cls, **kwargs)
+
+
+def peripheral_dio_spi(module, peripheral, **kwargs):
+    ttl_classes = {
+        "input": ttl_serdes_7series.InOut_8X,
+        "output": ttl_serdes_7series.Output_8X
+    }
+    if len(peripheral["ports"]) != 1:
+        raise ValueError("peripheral dio_spi must be assigned one port")
+    spi = [(s["clk"], s.get("mosi"), s.get("miso"), s.get("cs", []))
+           for s in peripheral["spi"]]
+    ttl = [(t["pin"], ttl_classes[t["direction"]],
+            edge_counter.SimpleEdgeCounter if t.get("edge_counter") else None)
+           for t in peripheral.get("ttl", [])]
+    eem.DIO_SPI.add_std(module, peripheral["ports"][0], spi, ttl, **kwargs)
 
 
 def peripheral_urukul(module, peripheral, **kwargs):
@@ -31,7 +47,7 @@ def peripheral_urukul(module, peripheral, **kwargs):
     else:
         sync_gen_cls = None
     eem.Urukul.add_std(module, port, port_aux, ttl_serdes_7series.Output_8X,
-        sync_gen_cls, **kwargs)
+        peripheral["dds"], sync_gen_cls, **kwargs)
 
 
 def peripheral_novogorny(module, peripheral, **kwargs):
@@ -119,6 +135,7 @@ def peripheral_hvamp(module, peripheral, **kwargs):
 
 peripheral_processors = {
     "dio": peripheral_dio,
+    "dio_spi": peripheral_dio_spi,
     "urukul": peripheral_urukul,
     "novogorny": peripheral_novogorny,
     "sampler": peripheral_sampler,

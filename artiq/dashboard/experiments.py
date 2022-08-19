@@ -16,8 +16,10 @@ import h5py
 from sipyco import pyon
 
 from artiq.gui.entries import procdesc_to_entry, ScanEntry
+from artiq.gui.fuzzy_select import FuzzySelectWidget
 from artiq.gui.tools import LayoutWidget, log_level_to_name, get_open_file_name
 from artiq.tools import summarise_mod
+
 
 logger = logging.getLogger(__name__)
 
@@ -240,6 +242,9 @@ class _ArgumentEditor(QtWidgets.QTreeWidget):
                 pass
         self.verticalScrollBar().setValue(state["scroll"])
 
+    # Hooks that allow user-supplied argument editors to react to imminent user
+    # actions. Here, we always keep the manager-stored submission arguments
+    # up-to-date, so no further action is required.
     def about_to_submit(self):
         pass
 
@@ -277,7 +282,6 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
         QtWidgets.QMdiSubWindow.__init__(self)
         qfm = QtGui.QFontMetrics(self.font())
         self.resize(100*qfm.averageCharWidth(), 30*qfm.lineSpacing())
-
         self.setWindowIcon(QtWidgets.QApplication.style().standardIcon(
             QtWidgets.QStyle.SP_FileDialogContentsView))
 
@@ -318,11 +322,14 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
         self.setWindowTitle(self._make_title(self.manager, self.expurl))
 
         self.layout = QtWidgets.QGridLayout()
+        top_widget = QtWidgets.QWidget()
+        top_widget.setLayout(self.layout)
+        self.setWidget(top_widget)
         self.layout.setSpacing(5)
         self.layout.setContentsMargins(5, 5, 5, 5)
 
-        self.layout.setRowStretch(0, 1)
         self._create_argeditor()
+        self.layout.setRowStretch(0, 1)
 
         scheduling = self.manager.get_submission_scheduling(self.expurl)
         options = self.manager.get_submission_options(self.expurl)
@@ -353,7 +360,8 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
             scheduling["due_date"] = due_date
         datetime_en.stateChanged.connect(update_datetime_en)
 
-        pipeline_name = QtWidgets.QLineEdit()
+        self.pipeline_name = QtWidgets.QLineEdit()
+        pipeline_name = self.pipeline_name
         self.layout.addWidget(QtWidgets.QLabel("Pipeline:"), 1, 2)
         self.layout.addWidget(pipeline_name, 1, 3)
 
@@ -363,7 +371,8 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
             scheduling["pipeline_name"] = text
         pipeline_name.textChanged.connect(update_pipeline_name)
 
-        priority = QtWidgets.QSpinBox()
+        self.priority = QtWidgets.QSpinBox()
+        priority = self.priority
         priority.setRange(-99, 99)
         self.layout.addWidget(QtWidgets.QLabel("Priority:"), 2, 0)
         self.layout.addWidget(priority, 2, 1)
@@ -374,7 +383,8 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
             scheduling["priority"] = value
         priority.valueChanged.connect(update_priority)
 
-        flush = QtWidgets.QCheckBox("Flush")
+        self.flush = QtWidgets.QCheckBox("Flush")
+        flush = self.flush
         flush.setToolTip("Flush the pipeline (of current- and higher-priority "
                          "experiments) before starting the experiment")
         self.layout.addWidget(flush, 2, 2, 1, 2)
@@ -424,7 +434,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
 
         submit = QtWidgets.QPushButton("Submit")
         submit.setIcon(QtWidgets.QApplication.style().standardIcon(
-            QtWidgets.QStyle.SP_DialogOkButton))
+                QtWidgets.QStyle.SP_DialogOkButton))
         submit.setToolTip("Schedule the experiment (Ctrl+Return)")
         submit.setShortcut("CTRL+RETURN")
         submit.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
@@ -434,7 +444,7 @@ class _ExperimentDock(QtWidgets.QMdiSubWindow):
 
         reqterm = QtWidgets.QPushButton("Terminate instances")
         reqterm.setIcon(QtWidgets.QApplication.style().standardIcon(
-            QtWidgets.QStyle.SP_DialogCancelButton))
+                QtWidgets.QStyle.SP_DialogCancelButton))
         reqterm.setToolTip("Request termination of instances (Ctrl+Backspace)")
         reqterm.setShortcut("CTRL+BACKSPACE")
         reqterm.setSizePolicy(QtWidgets.QSizePolicy.Expanding,
@@ -606,8 +616,10 @@ class MissingExperimentError(Exception):
 
 
 class ExperimentManager:
-    #: Registry for custom argument editor classes, indexed by the experiment
-    #: argument_ui key string.
+    #: Global registry for custom argument editor classes, indexed by the experiment
+    #: `argument_ui` string; can be populated by dashboard plugins such as ndscan.
+    #: If no handler for a requested UI name is found, the default built-in argument
+    #: editor will be used.
     argument_ui_classes = dict()
 
     def __init__(self, main_window, dataset_sub,
@@ -897,7 +909,7 @@ class ExperimentManager:
             else:
                 repo_match = "repo_rev" not in expid
             if (repo_match and
-                    expid["file"] == exp.file and
+                    ("file" in expid and expid["file"] == exp.file) and
                     expid["class_name"] == exp.class_name and
                     expid["worker_manager_id"] == exp.worker_manager_id):
                 rids.append(rid)

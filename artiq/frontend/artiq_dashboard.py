@@ -126,6 +126,7 @@ def main():
         core_limit = resource.getrlimit(resource.RLIMIT_CORE)
         logging.info(f"Set core limit {core_limit}")
 
+    # load any plugin modules first (to register argument_ui classes, etc.)
     if args.plugin_modules:
         for mod in args.plugin_modules:
             importlib.import_module(mod)
@@ -247,14 +248,18 @@ def main():
                                        rpc_clients["dataset_db"])
     smgr.register(d_datasets)
 
-    d_applets = applets_ccb.AppletsCCBDock(main_window, sub_clients["datasets"],
-        extra_substitutes={"server": args.server, "port_notify": args.port_notify,
-        "port_control": args.port_control})
+    d_applets = applets_ccb.AppletsCCBDock(main_window,
+                                           sub_clients["datasets"],
+                                           extra_substitutes={
+                                               "server": args.server,
+                                               "port_notify": args.port_notify,
+                                               "port_control": args.port_control,
+                                           })
     atexit_register_coroutine(d_applets.stop)
     smgr.register(d_applets)
     broadcast_clients["ccb"].notify_cbs.append(d_applets.ccb_notify)
 
-    d_ttl_dds = moninj.MonInj()
+    d_ttl_dds = moninj.MonInj(rpc_clients["schedule"])
     loop.run_until_complete(d_ttl_dds.start(args.server, args.port_notify))
     atexit_register_coroutine(d_ttl_dds.stop)
 
@@ -321,9 +326,9 @@ def main():
         server_description = server_name + " ({})".format(args.server)
     else:
         server_description = args.server
-    logging.info("ARTIQ dashboard %s connected to %s",
-                 artiq_version, server_description)
-
+    logging.info("ARTIQ dashboard version: %s",
+                 artiq_version)
+    logging.info("ARTIQ dashboard connected to moninj_proxy (%s)", server_description)
     # run
     main_window.show()
     loop.run_until_complete(main_window.exit_request.wait())

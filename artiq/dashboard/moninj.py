@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import textwrap
 from collections import namedtuple
 
 from PyQt5 import QtCore, QtWidgets, QtGui
@@ -7,11 +8,23 @@ from PyQt5 import QtCore, QtWidgets, QtGui
 from sipyco.sync_struct import Notifier, Subscriber
 
 from artiq.coredevice.comm_moninj import *
+from artiq.coredevice.ad9910 import _AD9910_REG_PROFILE0, _AD9910_REG_PROFILE7, _AD9910_REG_FTW
+from artiq.coredevice.ad9912_reg import AD9912_POW1
 from artiq.gui.tools import LayoutWidget
 from artiq.gui.flowlayout import FlowLayout
 
 
 logger = logging.getLogger(__name__)
+
+class _CancellableLineEdit(QtWidgets.QLineEdit):
+    def escapePressedConnect(self, cb):
+        self.esc_cb = cb
+
+    def keyPressEvent(self, event):
+        key = event.key()
+        if key == QtCore.Qt.Key_Escape:
+            self.esc_cb(event)
+        QtWidgets.QLineEdit.keyPressEvent(self, event)
 
 
 class _TTLWidget(QtWidgets.QFrame):
@@ -168,15 +181,168 @@ class _SimpleDisplayWidget(QtWidgets.QFrame):
         raise NotImplementedError
 
 
-class _DDSWidget(_SimpleDisplayWidget):
-    def __init__(self, dm, bus_channel, channel, title):
+class _DDSModel:
+    def __init__(self, dds_type, ref_clk, cpld=None, pll=1, clk_div=0):
+        self.cpld = cpld
+        self.cur_frequency = 0
+        self.cur_reg = 0
+        self.dds_type = dds_type
+        self.is_urukul = dds_type in ["AD9910", "AD9912"]
+
+        if dds_type == "AD9914":
+            self.ftw_per_hz = 2**32 / ref_clk
+        else:
+            if dds_type == "AD9910":
+                max_freq = 1 << 32
+                clk_mult = [4, 1, 2, 4]
+            elif dds_type == "AD9912":  # AD9912
+                max_freq = 1 << 48
+                clk_mult = [1, 1, 2, 4]
+            else:
+                raise NotImplementedError
+            sysclk = ref_clk / clk_mult[clk_div] * pll
+            self.ftw_per_hz = 1 / sysclk * max_freq
+
+    def monitor_update(self, probe, value):
+        if self.dds_type == "AD9912":
+            value = value << 16
+        self.cur_frequency = self._ftw_to_freq(value)
+
+    def _ftw_to_freq(self, ftw):
+        return ftw / self.ftw_per_hz
+
+
+class _DDSWidget(QtWidgets.QFrame):
+    def __init__(self, dm, title, bus_channel=0, channel=0, dds_model=None):
+        self.dm = dm
         self.bus_channel = bus_channel
         self.channel = channel
+        self.dds_name = title
         self.cur_frequency = 0
-        _SimpleDisplayWidget.__init__(self, title)
+        self.dds_model = dds_model
+
+        QtWidgets.QFrame.__init__(self)
+
+        self.setFrameShape(QtWidgets.QFrame.Box)
+        self.setFrameShadow(QtWidgets.QFrame.Raised)
+
+        grid = QtWidgets.QGridLayout()
+        grid.setContentsMargins(0, 0, 0, 0)
+        grid.setHorizontalSpacing(0)
+        grid.setVerticalSpacing(0)
+        self.setLayout(grid)
+        label = QtWidgets.QLabel(title)
+        label.setAlignment(QtCore.Qt.AlignCenter)
+        grid.addWidget(label, 1, 1)
+
+        # FREQ DATA/EDIT FIELD
+        self.data_stack = QtWidgets.QStackedWidget()
+
+        # page 1: display data
+        grid_disp = LayoutWidget()
+        grid_disp.layout.setContentsMargins(0, 0, 0, 0)
+        grid_disp.layout.setHorizontalSpacing(0)
+        grid_disp.layout.setVerticalSpacing(0)
+
+        self.value_label = QtWidgets.QLabel()
+        self.value_label.setAlignment(QtCore.Qt.AlignCenter)
+        grid_disp.addWidget(self.value_label, 0, 1, 1, 2)
+
+        unit = QtWidgets.QLabel("MHz")
+        unit.setAlignment(QtCore.Qt.AlignCenter)
+        grid_disp.addWidget(unit, 0, 3, 1, 1)
+
+        self.data_stack.addWidget(grid_disp)
+
+        # page 2: edit data
+        grid_edit = LayoutWidget()
+        grid_edit.layout.setContentsMargins(0, 0, 0, 0)
+        grid_edit.layout.setHorizontalSpacing(0)
+        grid_edit.layout.setVerticalSpacing(0)
+
+        self.value_edit = _CancellableLineEdit(self)
+        self.value_edit.setAlignment(QtCore.Qt.AlignRight)
+        grid_edit.addWidget(self.value_edit, 0, 1, 1, 2)
+        unit = QtWidgets.QLabel("MHz")
+        unit.setAlignment(QtCore.Qt.AlignCenter)
+        grid_edit.addWidget(unit, 0, 3, 1, 1)
+        self.data_stack.addWidget(grid_edit)
+
+        grid.addWidget(self.data_stack, 2, 1)
+
+        # BUTTONS
+        self.button_stack = QtWidgets.QStackedWidget()
+
+        # page 1: SET button
+        set_grid = LayoutWidget()
+
+        set_btn = QtWidgets.QToolButton()
+        set_btn.setText("Set")
+        set_btn.setToolTip("Set frequency")
+        set_grid.addWidget(set_btn, 0, 1, 1, 1)
+
+        # for urukuls also allow switching off RF
+        if self.dds_model.is_urukul:
+            off_btn = QtWidgets.QToolButton()
+            off_btn.setText("Off")
+            off_btn.setToolTip("Switch off the output")
+            set_grid.addWidget(off_btn, 0, 2, 1, 1)
+
+        self.button_stack.addWidget(set_grid)
+
+        # page 2: apply/cancel buttons
+        apply_grid = LayoutWidget()
+        apply = QtWidgets.QToolButton()
+        apply.setText("Apply")
+        apply.setToolTip("Apply changes")
+        apply_grid.addWidget(apply, 0, 1, 1, 1)
+        cancel = QtWidgets.QToolButton()
+        cancel.setText("Cancel")
+        cancel.setToolTip("Cancel changes")
+        apply_grid.addWidget(cancel, 0, 2, 1, 1)
+        self.button_stack.addWidget(apply_grid)
+        grid.addWidget(self.button_stack, 3, 1)
+
+        grid.setRowStretch(1, 1)
+        grid.setRowStretch(2, 1)
+        grid.setRowStretch(3, 1)
+
+        set_btn.clicked.connect(self.set_clicked)
+        apply.clicked.connect(self.apply_changes)
+        if self.dds_model.is_urukul:
+            off_btn.clicked.connect(self.off_clicked)
+        self.value_edit.returnPressed.connect(lambda: self.apply_changes(None))
+        self.value_edit.escapePressedConnect(self.cancel_changes)
+        cancel.clicked.connect(self.cancel_changes)
+
+        self.refresh_display()
+
+    def set_clicked(self, set):
+        self.data_stack.setCurrentIndex(1)
+        self.button_stack.setCurrentIndex(1)
+        self.value_edit.setText("{:.7f}"
+                .format(self.cur_frequency/1e6))
+        self.value_edit.setFocus()
+        self.value_edit.selectAll()
+
+    def off_clicked(self, set):
+        self.dm.dds_channel_toggle(self.dds_name, self.dds_model, sw=False)
+
+    def apply_changes(self, apply):
+        self.data_stack.setCurrentIndex(0)
+        self.button_stack.setCurrentIndex(0)
+        frequency = float(self.value_edit.text())*1e6
+        self.dm.dds_set_frequency(self.dds_name, self.dds_model, frequency)
+
+    def cancel_changes(self, cancel):
+        self.data_stack.setCurrentIndex(0)
+        self.button_stack.setCurrentIndex(0)
 
     def refresh_display(self):
-        self.value.setText("<font size=\"4\">{:.7f}</font><font size=\"2\"> MHz</font>"
+        self.cur_frequency = self.dds_model.cur_frequency
+        self.value_label.setText("<font size=\"4\">{:.7f}</font>"
+                           .format(self.cur_frequency/1e6))
+        self.value_edit.setText("{:.7f}"
                            .format(self.cur_frequency/1e6))
 
     def sort_key(self):
@@ -202,52 +368,75 @@ _WidgetDesc = namedtuple("_WidgetDesc", "uid comment cls arguments")
 
 
 def setup_from_ddb(ddb):
-    core_addr = None
+    mi_addr = None
+    mi_port = None
     dds_sysclk = None
     description = set()
 
     for k, v in ddb.items():
-        comment = None
-        if "comment" in v:
-            comment = v["comment"]
         try:
-            if isinstance(v, dict) and v["type"] == "local":
-                if k == "core":
-                    core_addr = v["arguments"]["host"]
-                elif v["module"] == "artiq.coredevice.ttl":
-                    channel = v["arguments"]["channel"]
-                    force_out = v["class"] == "TTLOut"
-                    widget = _WidgetDesc(k, comment, _TTLWidget, (channel, force_out, k))
-                    description.add(widget)
-                elif (v["module"] == "artiq.coredevice.ad9914"
-                        and v["class"] == "AD9914"):
-                    bus_channel = v["arguments"]["bus_channel"]
-                    channel = v["arguments"]["channel"]
-                    dds_sysclk = v["arguments"]["sysclk"]
-                    widget = _WidgetDesc(k, comment, _DDSWidget, (bus_channel, channel, k))
-                    description.add(widget)
-                elif (   (v["module"] == "artiq.coredevice.ad53xx" and v["class"] == "AD53XX")
-                      or (v["module"] == "artiq.coredevice.zotino" and v["class"] == "Zotino")):
-                    spi_device = v["arguments"]["spi_device"]
-                    spi_device = ddb[spi_device]
-                    while isinstance(spi_device, str):
-                        spi_device = ddb[spi_device]
-                    spi_channel = spi_device["arguments"]["channel"]
-                    for channel in range(32):
-                        widget = _WidgetDesc((k, channel), comment, _DACWidget, (spi_channel, channel, k))
+            if isinstance(v, dict):
+                comment = v.get("comment")
+                if v["type"] == "local":
+                    if v["module"] == "artiq.coredevice.ttl":
+                        if "ttl_urukul" in k:
+                            continue
+                        channel = v["arguments"]["channel"]
+                        force_out = v["class"] == "TTLOut"
+                        widget = _WidgetDesc(k, comment, _TTLWidget, (channel, force_out, k))
                         description.add(widget)
+                    elif (v["module"] == "artiq.coredevice.ad9914"
+                            and v["class"] == "AD9914"):
+                        bus_channel = v["arguments"]["bus_channel"]
+                        channel = v["arguments"]["channel"]
+                        dds_sysclk = v["arguments"]["sysclk"]
+                        model = _DDSModel(v["class"], dds_sysclk)
+                        widget = _WidgetDesc(k, comment, _DDSWidget, (k, bus_channel, channel, model))
+                        description.add(widget)
+                    elif (v["module"] == "artiq.coredevice.ad9910"
+                                and v["class"] == "AD9910") or \
+                            (v["module"] == "artiq.coredevice.ad9912"
+                                and v["class"] == "AD9912"):
+                        channel = v["arguments"]["chip_select"] - 4
+                        if channel < 0:
+                            continue
+                        dds_cpld = v["arguments"]["cpld_device"]
+                        spi_dev = ddb[dds_cpld]["arguments"]["spi_device"]
+                        bus_channel = ddb[spi_dev]["arguments"]["channel"]
+                        pll = v["arguments"]["pll_n"]
+                        refclk = ddb[dds_cpld]["arguments"]["refclk"]
+                        clk_div = v["arguments"].get("clk_div", 0)
+                        model = _DDSModel( v["class"], refclk, dds_cpld, pll, clk_div)
+                        widget = _WidgetDesc(k, comment, _DDSWidget, (k, bus_channel, channel, model))
+                        description.add(widget)
+                    elif (   (v["module"] == "artiq.coredevice.ad53xx" and v["class"] == "AD53xx")
+                          or (v["module"] == "artiq.coredevice.zotino" and v["class"] == "Zotino")):
+                        spi_device = v["arguments"]["spi_device"]
+                        spi_device = ddb[spi_device]
+                        while isinstance(spi_device, str):
+                            spi_device = ddb[spi_device]
+                        spi_channel = spi_device["arguments"]["channel"]
+                        for channel in range(32):
+                            widget = _WidgetDesc((k, channel), comment, _DACWidget, (spi_channel, channel, k))
+                            description.add(widget)
+                elif v["type"] == "controller" and k == "core_moninj":
+                    mi_addr = v["host"]
+                    mi_port = v.get("port_proxy", 1383)
         except KeyError:
             pass
-    return core_addr, dds_sysclk, description
+    return mi_addr, mi_port, description
 
 
 class _DeviceManager:
-    def __init__(self, notifier):
+    def __init__(self, schedule_ctl, notifier):
+        self.mi_addr = None
+        self.mi_port = None
+        self.reconnect_mi = asyncio.Event()
+        self.mi_connection = None
+        self.mi_connector_task = asyncio.ensure_future(self.mi_connector())
+
+        self.schedule_ctl = schedule_ctl
         self.notifier = notifier
-        self.core_addr = None
-        self.reconnect_core = asyncio.Event()
-        self.core_connection = None
-        self.core_connector_task = asyncio.ensure_future(self.core_connector())
 
         self.ddb = dict()
         self.description = set()
@@ -266,13 +455,12 @@ class _DeviceManager:
         return ddb
 
     def notify(self, mod):
-        core_addr, dds_sysclk, description = setup_from_ddb(self.ddb)
+        mi_addr, mi_port, description = setup_from_ddb(self.ddb)
 
-        if core_addr != self.core_addr:
-            self.core_addr = core_addr
-            self.reconnect_core.set()
-
-        self.dds_sysclk = dds_sysclk
+        if (mi_addr, mi_port) != (self.mi_addr, self.mi_port):
+            self.mi_addr = mi_addr
+            self.mi_port = mi_port
+            self.reconnect_mi.set()
 
         for to_remove in self.description - description:
             widget = self.widgets_by_uid[to_remove.uid]
@@ -292,7 +480,7 @@ class _DeviceManager:
                 self.setup_dac_monitoring(False, widget.spi_channel, widget.channel)
                 widget.deleteLater()
                 del self.dac_widgets[(widget.spi_channel, widget.channel)]
-                self.dac_cb()     
+                self.dac_cb()
             else:
                 raise ValueError
 
@@ -320,44 +508,148 @@ class _DeviceManager:
         self.description = description
 
     def ttl_set_mode(self, channel, mode):
-        if self.core_connection is not None:
+        if self.mi_connection is not None:
             widget = self.ttl_widgets[channel]
             if mode == "0":
                 widget.cur_override = True
                 widget.cur_level = False
-                self.core_connection.inject(channel, TTLOverride.level.value, 0)
-                self.core_connection.inject(channel, TTLOverride.oe.value, 1)
-                self.core_connection.inject(channel, TTLOverride.en.value, 1)
+                self.mi_connection.inject(channel, TTLOverride.level.value, 0)
+                self.mi_connection.inject(channel, TTLOverride.oe.value, 1)
+                self.mi_connection.inject(channel, TTLOverride.en.value, 1)
             elif mode == "1":
                 widget.cur_override = True
                 widget.cur_level = True
-                self.core_connection.inject(channel, TTLOverride.level.value, 1)
-                self.core_connection.inject(channel, TTLOverride.oe.value, 1)
-                self.core_connection.inject(channel, TTLOverride.en.value, 1)
+                self.mi_connection.inject(channel, TTLOverride.level.value, 1)
+                self.mi_connection.inject(channel, TTLOverride.oe.value, 1)
+                self.mi_connection.inject(channel, TTLOverride.en.value, 1)
             elif mode == "exp":
                 widget.cur_override = False
-                self.core_connection.inject(channel, TTLOverride.en.value, 0)
+                self.mi_connection.inject(channel, TTLOverride.en.value, 0)
             else:
                 raise ValueError
             # override state may have changed
             widget.refresh_display()
 
+    async def _submit_by_content(self, content, class_name, title):
+        expid = {
+            "log_level": logging.WARNING,
+            "content": content,
+            "class_name": class_name,
+            "arguments": {}
+        }
+        scheduling = {
+            "pipeline_name": "main",
+            "priority": 0,
+            "due_date": None,
+            "flush": False
+        }
+        rid = await self.schedule_ctl.submit(
+            scheduling["pipeline_name"],
+            expid,
+            scheduling["priority"], scheduling["due_date"],
+            scheduling["flush"])
+        logger.info("Submitted '%s', RID is %d", title, rid)
+
+    def dds_set_frequency(self, dds_channel, dds_model, freq):
+        # create kernel and fill it in and send-by-content
+        if dds_model.is_urukul:
+            # urukuls need CPLD init and switch to on
+            # keep previous config if it was set already
+            cpld_dev = """self.setattr_device("core_cache")
+                self.setattr_device("{}")""".format(dds_model.cpld)
+            cpld_init = """cfg = self.core_cache.get("_{cpld}_cfg")
+                if len(cfg) > 0:
+                    self.{cpld}.cfg_reg = cfg[0]
+                else:
+                    delay(15*ms)
+                    self.{cpld}.init()
+                    self.core_cache.put("_{cpld}_cfg", [self.{cpld}.cfg_reg])
+                    cfg = self.core_cache.get("_{cpld}_cfg")
+            """.format(cpld=dds_model.cpld)
+            cfg_sw = """self.{}.cfg_sw(True)
+                cfg[0] = self.{}.cfg_reg
+            """.format(dds_channel, dds_model.cpld)
+        else:
+            cpld_dev = ""
+            cpld_init = ""
+            cfg_sw = ""
+        dds_exp = textwrap.dedent("""
+        from artiq.experiment import *
+
+        class SetDDS(EnvExperiment):
+            def build(self):
+                self.setattr_device("core")
+                self.setattr_device("{dds_channel}")
+                {cpld_dev}
+
+            @kernel
+            def run(self):
+                self.core.reset()
+                {cpld_init}
+                delay(5*ms)
+                self.{dds_channel}.init()
+                self.{dds_channel}.set({freq})
+                {cfg_sw}
+        """.format(dds_channel=dds_channel, freq=freq,
+                   cpld_dev=cpld_dev, cpld_init=cpld_init,
+                   cfg_sw=cfg_sw))
+        asyncio.ensure_future(
+            self._submit_by_content(
+                dds_exp,
+                "SetDDS",
+                "Set DDS {} {}MHz".format(dds_channel, freq/1e6)))
+
+    def dds_channel_toggle(self, dds_channel, dds_model, sw=True):
+        # urukul only
+        toggle_exp = textwrap.dedent("""
+        from artiq.experiment import *
+
+        class ToggleDDS(EnvExperiment):
+            def build(self):
+                self.setattr_device("core")
+                self.setattr_device("{ch}")
+                self.setattr_device("core_cache")
+                self.setattr_device("{cpld}")
+
+            @kernel
+            def run(self):
+                self.core.reset()
+                cfg = self.core_cache.get("_{cpld}_cfg")
+                if len(cfg) > 0:
+                    self.{cpld}.cfg_reg = cfg[0]
+                else:
+                    delay(15*ms)
+                    self.{cpld}.init()
+                    self.core_cache.put("_{cpld}_cfg", [self.{cpld}.cfg_reg])
+                    cfg = self.core_cache.get("_{cpld}_cfg")
+                delay(5*ms)
+                self.{ch}.init()
+                self.{ch}.cfg_sw({sw})
+                cfg[0] = self.{cpld}.cfg_reg
+        """.format(ch=dds_channel, cpld=dds_model.cpld, sw=sw))
+        asyncio.ensure_future(
+            self._submit_by_content(
+                toggle_exp,
+                "ToggleDDS",
+                "Toggle DDS {} {}".format(dds_channel, "on" if sw else "off"))
+        )
+
     def setup_ttl_monitoring(self, enable, channel):
-        if self.core_connection is not None:
-            self.core_connection.monitor_probe(enable, channel, TTLProbe.level.value)
-            self.core_connection.monitor_probe(enable, channel, TTLProbe.oe.value)
-            self.core_connection.monitor_injection(enable, channel, TTLOverride.en.value)
-            self.core_connection.monitor_injection(enable, channel, TTLOverride.level.value)
+        if self.mi_connection is not None:
+            self.mi_connection.monitor_probe(enable, channel, TTLProbe.level.value)
+            self.mi_connection.monitor_probe(enable, channel, TTLProbe.oe.value)
+            self.mi_connection.monitor_injection(enable, channel, TTLOverride.en.value)
+            self.mi_connection.monitor_injection(enable, channel, TTLOverride.level.value)
             if enable:
-                self.core_connection.get_injection_status(channel, TTLOverride.en.value)
+                self.mi_connection.get_injection_status(channel, TTLOverride.en.value)
 
     def setup_dds_monitoring(self, enable, bus_channel, channel):
-        if self.core_connection is not None:
-            self.core_connection.monitor_probe(enable, bus_channel, channel)
+        if self.mi_connection is not None:
+            self.mi_connection.monitor_probe(enable, bus_channel, channel)
 
     def setup_dac_monitoring(self, enable, spi_channel, channel):
-        if self.core_connection is not None:
-            self.core_connection.monitor_probe(enable, spi_channel, channel)
+        if self.mi_connection is not None:
+            self.mi_connection.monitor_probe(enable, spi_channel, channel)
 
     def monitor_cb(self, channel, probe, value):
         if channel in self.ttl_widgets:
@@ -367,11 +659,11 @@ class _DeviceManager:
             elif probe == TTLProbe.oe.value:
                 widget.cur_oe = bool(value)
             widget.refresh_display()
-        if (channel, probe) in self.dds_widgets:
+        elif (channel, probe) in self.dds_widgets:
             widget = self.dds_widgets[(channel, probe)]
-            widget.cur_frequency = value*self.dds_sysclk/2**32
+            widget.dds_model.monitor_update(probe, value)
             widget.refresh_display()
-        if (channel, probe) in self.dac_widgets:
+        elif (channel, probe) in self.dac_widgets:
             widget = self.dac_widgets[(channel, probe)]
             widget.cur_value = value
             widget.refresh_display()
@@ -386,30 +678,32 @@ class _DeviceManager:
             widget.refresh_display()
 
     def disconnect_cb(self):
-        logger.error("lost connection to core device moninj")
-        self.reconnect_core.set()
+        logger.error("lost connection to moninj")
+        self.reconnect_mi.set()
 
-    async def core_connector(self):
+    async def mi_connector(self):
         while True:
-            await self.reconnect_core.wait()
-            self.reconnect_core.clear()
+            await self.reconnect_mi.wait()
+            self.reconnect_mi.clear()
             self.notifier["connected"] = False
-            if self.core_connection is not None:
-                await self.core_connection.close()
-                self.core_connection = None
-            new_core_connection = CommMonInj(self.monitor_cb, self.injection_status_cb,
+            if self.mi_connection is not None:
+                await self.mi_connection.close()
+                self.mi_connection = None
+            new_mi_connection = CommMonInj(self.monitor_cb, self.injection_status_cb,
                     self.disconnect_cb)
             try:
-                await new_core_connection.connect(self.core_addr, 1383)
+                await new_mi_connection.connect(self.mi_addr, self.mi_port)
             except asyncio.CancelledError:
-                logger.info("cancelled connection to core device moninj")
+                logger.info("cancelled connection to moninj")
                 break
             except:
-                logger.error("failed to connect to core device moninj", exc_info=True)
+                logger.error("failed to connect to moninj", exc_info=True)
                 await asyncio.sleep(10.)
-                self.reconnect_core.set()
+                self.reconnect_mi.set()
             else:
-                self.core_connection = new_core_connection
+                logger.info("ARTIQ dashboard connected to moninj proxy (%s)",
+                            self.mi_addr)
+                self.mi_connection = new_mi_connection
                 for ttl_channel in self.ttl_widgets.keys():
                     self.setup_ttl_monitoring(True, ttl_channel)
                 for bus_channel, channel in self.dds_widgets.keys():
@@ -419,13 +713,13 @@ class _DeviceManager:
                 self.notifier["connected"] = True
 
     async def close(self):
-        self.core_connector_task.cancel()
+        self.mi_connector_task.cancel()
         try:
-            await asyncio.wait_for(self.core_connector_task, None)
+            await asyncio.wait_for(self.mi_connector_task, None)
         except asyncio.CancelledError:
             pass
-        if self.core_connection is not None:
-            await self.core_connection.close()
+        if self.mi_connection is not None:
+            await self.mi_connection.close()
 
 
 class _MonInjDock(QtWidgets.QDockWidget):
@@ -451,13 +745,13 @@ class _MonInjDock(QtWidgets.QDockWidget):
 
 
 class MonInj:
-    def __init__(self):
+    def __init__(self, schedule_ctl):
         self.ttl_dock = _MonInjDock("TTL")
         self.dds_dock = _MonInjDock("DDS")
         self.dac_dock = _MonInjDock("DAC")
 
         self.notifier = Notifier({"connected": False})
-        self.dm = _DeviceManager(self.notifier)
+        self.dm = _DeviceManager(schedule_ctl, self.notifier)
         self.dm.ttl_cb = lambda: self.ttl_dock.layout_widgets(
                             self.dm.ttl_widgets.values())
         self.dm.dds_cb = lambda: self.dds_dock.layout_widgets(

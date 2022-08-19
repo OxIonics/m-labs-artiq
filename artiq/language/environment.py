@@ -1,5 +1,6 @@
 from collections import OrderedDict
 from inspect import isclass
+import logging
 
 from sipyco import pyon
 
@@ -12,6 +13,8 @@ __all__ = ["NoDefault", "DefaultMissing",
            "NumberValue", "StringValue",
            "HasEnvironment", "Experiment", "EnvExperiment"]
 
+
+logger = logging.getLogger(__name__)
 
 class NoDefault:
     """Represents the absence of a default value."""
@@ -209,25 +212,36 @@ class TraceArgumentManager:
         self.requested_args[key] = processor, group, tooltip
         return None
 
+    def check_unprocessed_arguments(self):
+        pass
 
 class ProcessArgumentManager:
     def __init__(self, unprocessed_arguments):
         self.unprocessed_arguments = unprocessed_arguments
+        self._processed_arguments = set()
 
     def get(self, key, processor, group, tooltip):
         if key in self.unprocessed_arguments:
             r = processor.process(self.unprocessed_arguments[key])
+            self._processed_arguments.add(key)
         else:
             r = processor.default()
         return r
 
+    def check_unprocessed_arguments(self):
+        unprocessed = set(self.unprocessed_arguments.keys()) -\
+                      self._processed_arguments
+        if unprocessed:
+            logging.warn("Invalid argument(s): %s", ", ".join(unprocessed))
 
 class HasEnvironment:
     """Provides methods to manage the environment of an experiment (arguments,
     devices, datasets)."""
     def __init__(self, managers_or_parent, *args, **kwargs):
         self.children = []
-        if isinstance(managers_or_parent, tuple):
+
+        is_root = isinstance(managers_or_parent, tuple)
+        if is_root:
             self.__device_mgr = managers_or_parent[0]
             self.__dataset_mgr = managers_or_parent[1]
             self.__argument_mgr = managers_or_parent[2]
@@ -242,6 +256,8 @@ class HasEnvironment:
         self.__in_build = True
         self.build(*args, **kwargs)
         self.__in_build = False
+        if is_root and self.__argument_mgr is not None:
+            self.__argument_mgr.check_unprocessed_arguments()
 
     def register_child(self, child):
         self.children.append(child)
@@ -485,7 +501,7 @@ def is_experiment(o):
 
 
 def is_public_experiment(o):
-    """Checks if a Pyhton object is a top-level,
+    """Checks if a Python object is a top-level,
     non underscore-prefixed, experiment class.
     """
     return is_experiment(o) and not o.__name__.startswith("_")

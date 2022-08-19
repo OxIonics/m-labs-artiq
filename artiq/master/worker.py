@@ -343,7 +343,8 @@ class Worker:
     async def build(self, rid, pipeline_name, wd, expid, priority,
                     timeout=15.0):
         self.rid = rid
-        self.filename = os.path.basename(expid["file"])
+        if "file" in expid:
+            self.filename = os.path.basename(expid["file"])
         await self._create_process(expid["log_level"])
         await self._worker_action(
             {"action": "build",
@@ -388,10 +389,14 @@ class Worker:
         await self._create_process(logging.WARNING)
         r = dict()
 
-        def register(class_name, name, arginfo, argument_ui, scheduler_defaults):
-            r[class_name] = {"name": name, "arginfo": arginfo,
-                             "scheduler_defaults": scheduler_defaults,
-                             "argument_ui": argument_ui}
+        def register(class_name, name, arginfo, argument_ui,
+                     scheduler_defaults):
+            r[class_name] = {
+                "name": name,
+                "arginfo": arginfo,
+                "argument_ui": argument_ui,
+                "scheduler_defaults": scheduler_defaults
+            }
         self.register_experiment = register
         await self._worker_action({"action": "examine", "file": file},
                                   timeout)
