@@ -243,6 +243,11 @@ class AllStatusUpdater(ActiveWorkerManagerModel[StatusUpdater]):
         return StatusUpdater(data)
 
     def has_active_repo_ever_been_scanned(self):
+        if not self.backing_store:
+            # If there's nothing in the backing store assume it hasn't been
+            # populated yet and therefore assume the active repo has been
+            # scanned we just don't know about it.
+            return True
         return self._active_model is not None
 
 
@@ -445,18 +450,24 @@ class ExplorerDock(QtWidgets.QDockWidget):
         def on_model_change():
             self.el.setModel(model.active_model)
 
+        model.set_active_worker_manager(self.active_worker_manager_id)
+        model.add_model_change_cb(on_model_change)
         self.explist_model = model
         self.el.setModel(model.active_model)
-        model.add_model_change_cb(on_model_change)
 
     def set_status_model(self, model: AllStatusUpdater):
+        model.set_active_worker_manager(self.active_worker_manager_id)
+        model.set_explorer(self)
         self.status_model = model
-        self.status_model.set_explorer(self)
 
     def set_repo_model(self, model: WorkerManagerModel):
         model.local_worker_manager = self.local_worker_manager
         self.worker_managers_model = model
+        old_active_worker_manager_id = self.active_worker_manager_id
         self.repo_select.setModel(model)
+        if self.repo_select.currentData()["id"] != old_active_worker_manager_id:
+            self.active_worker_manager_id = old_active_worker_manager_id
+            self._set_worker_manager_in_ui()
 
     def _get_selected_expname(self):
         selection = self.el.selectedIndexes()
@@ -491,16 +502,34 @@ class ExplorerDock(QtWidgets.QDockWidget):
 
     def save_state(self):
         return {
-            "current_directory": self.current_directory
+            "current_directory": self.current_directory,
+            "active_worker_manager": self.active_worker_manager_id,
         }
 
     def restore_state(self, state):
         self.current_directory = state["current_directory"]
+        self.active_worker_manager_id = state.get("active_worker_manager")
+        if isinstance(self.repo_select.model(), WorkerManagerModel):
+            self._set_worker_manager_in_ui()
 
     def scan_repository(self):
         asyncio.ensure_future(self.experiment_db_ctl.scan_repository_async(
             worker_manager_id=self.active_worker_manager_id,
         ))
+
+    def _set_worker_manager_in_ui(self):
+        repo_model = self.repo_select.model()
+        try:
+            v = repo_model.backing_store[self.active_worker_manager_id]
+        except KeyError:
+            pass
+        else:
+            # This triggers `_repo_selected_changed`
+            self.repo_select.setCurrentIndex(
+                repo_model._find_row(
+                    self.active_worker_manager_id, v
+                )
+            )
 
     def _repo_selected_changed(self, index):
         data = self.repo_select.currentData()
