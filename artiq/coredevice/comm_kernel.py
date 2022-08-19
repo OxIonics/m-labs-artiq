@@ -14,7 +14,7 @@ from artiq import __version__ as software_version
 
 
 logger = logging.getLogger(__name__)
-version_re = re.compile(r"^\d+\.\d+\+g[\da-z]+\.fw(?P<fw>[\da-z]+)(?P<dirty>\.dirty)+?")
+version_re = re.compile(r"^\d+\.\d+\+g[\da-z]+\.fw(?P<fw>[\da-z]+)(?P<dirty>\.dirty)?")
 
 
 class Request(Enum):
@@ -638,11 +638,17 @@ class CommKernel:
         else:
             logger.debug("rpc service: %d %r %r = %r",
                          service_id, args, kwargs, result)
-            self._write_header(Request.RPCReply)
-            self._write_bytes(return_tags)
-            self._send_rpc_value(bytearray(return_tags),
-                                 result, result, service)
-            self._flush()
+            try:
+                self._write_header(Request.RPCReply)
+                self._write_bytes(return_tags)
+                self._send_rpc_value(bytearray(return_tags),
+                                     result, result, service)
+                self._flush()
+            except Exception as ex:
+                raise RuntimeError(
+                    f"Failed to return RPC value for RPC [{service_id}]{service!r} "
+                    f"return_tags={return_tags}: {ex}"
+                ) from ex
 
     def _serve_exception(self, embedding_map, symbolizer, demangler):
         exception_count = self._read_int32()
@@ -696,8 +702,14 @@ class CommKernel:
         else:
             python_exn_type = embedding_map.retrieve_object(core_exn.id)
 
-        python_exn = python_exn_type(
-            nested_exceptions[-1][1].format(*nested_exceptions[0][2]))
+        try:
+            python_exn = python_exn_type(
+                nested_exceptions[-1][1].format(*nested_exceptions[0][2]))
+        except Exception as ex:
+            python_exn = RuntimeError(
+                f"Exception type={python_exn_type}, which couldn't be "
+                f"reconstructed ({ex})"
+            )
         python_exn.artiq_core_exception = core_exn
         raise python_exn
 

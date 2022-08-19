@@ -627,7 +627,7 @@ pub fn thread(io: Io, aux_mutex: &Mutex,
                     continue
                 }
             }
-            info!("new connection from {}", stream.remote_endpoint());
+            debug!("new connection from {}", stream.remote_endpoint());
 
             let aux_mutex = aux_mutex.clone();
             let routing_table = routing_table.clone();
@@ -654,7 +654,7 @@ pub fn thread(io: Io, aux_mutex: &Mutex,
         }
 
         if kernel_thread.as_ref().map_or(true, |h| h.terminated()) {
-            info!("no connection, starting idle kernel");
+            debug!("no connection, starting idle kernel");
 
             let aux_mutex = aux_mutex.clone();
             let routing_table = routing_table.clone();
@@ -665,12 +665,12 @@ pub fn thread(io: Io, aux_mutex: &Mutex,
                 let mut congress = congress.borrow_mut();
                 match flash_kernel_worker(&io, &aux_mutex, &routing_table, &up_destinations, &mut *congress, "idle_kernel") {
                     Ok(()) =>
-                        info!("idle kernel finished, standing by"),
+                        debug!("idle kernel finished, standing by"),
                     Err(Error::Protocol(host::Error::Io(
                             IoError::Other(SchedError::Interrupted)))) =>
-                        info!("idle kernel interrupted"),
+                        debug!("idle kernel interrupted"),
                     Err(Error::KernelNotFound) => {
-                        info!("no idle kernel found");
+                        debug!("no idle kernel found");
                         while io.relinquish().is_ok() {}
                     }
                     Err(err) =>

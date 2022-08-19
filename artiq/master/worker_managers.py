@@ -3,17 +3,15 @@ from __future__ import annotations
 import asyncio
 from datetime import datetime, timedelta
 import logging
-from typing import AsyncIterator, Callable, Dict, List, Optional, Tuple
+from typing import Awaitable, Callable, Dict, List, Optional
 import uuid
 
-from artiq.tools import shutdown_and_drain
 from sipyco import pyon
 from sipyco.logging_tools import log_with_name
 from sipyco.sync_struct import Notifier
 
-from artiq.master.worker_transport import WorkerTransport
-from artiq.queue_tools import iterate_queue
-
+from artiq.master.worker_transport import OutputHandler, WorkerTransport
+from artiq.tools import shutdown_and_drain
 
 log = logging.getLogger(__name__)
 
@@ -193,7 +191,7 @@ class WorkerManagerDB:
 
 
 class _ManagedWorkerState:
-    def __init__(self):
+    def __init__(self, stdout_handler, stderr_handler):
         self.created = asyncio.get_event_loop().create_future()
         # If there's more than one item in this queue then that's quite
         # unexpected. It probably means that the `Worker` object and scheduling
@@ -203,8 +201,8 @@ class _ManagedWorkerState:
         # message like stack traces. It's nice not to await in the message
         # handling code so we don't to worry that we might block when we have a
         # waiting message.
-        self.stdout_queue = asyncio.Queue(100)
-        self.stderr_queue = asyncio.Queue(100)
+        self.stdout_handler = stdout_handler
+        self.stderr_handler = stderr_handler
         self.closed = asyncio.get_event_loop().create_future()
 
 
@@ -286,7 +284,7 @@ class WorkerManagerProxy:
                 action = obj["action"]
 
                 if action in self.worker_messages:
-                    self._worker_action(obj)
+                    await self._worker_action(obj)
                 elif action in self.scan_messages:
                     self._scan_action(obj)
                 elif action == "manager_log":
@@ -337,9 +335,7 @@ class WorkerManagerProxy:
         self._inprogress_scans.clear()
         if workers:
             (_, pending) = await asyncio.wait(
-                [worker.recv_queue.put("") for worker in workers] +
-                [worker.stdout_queue.put(None) for worker in workers] +
-                [worker.stderr_queue.put(None) for worker in workers],
+                [worker.recv_queue.put("") for worker in workers],
                 timeout=0.5,
                 )
             if pending:
@@ -353,7 +349,7 @@ class WorkerManagerProxy:
         self._reader = None
         self._writer = None
 
-    def _worker_action(self, obj):
+    async def _worker_action(self, obj):
         action = obj["action"]
         worker_id = obj["worker_id"]
         state = self._workers[worker_id]
@@ -376,15 +372,14 @@ class WorkerManagerProxy:
                     "Receive queue full. The master must be running behind"
                 )
         elif action == "worker_stdout":
-            try:
-                state.stdout_queue.put_nowait(obj["data"])
-            except asyncio.QueueFull:
-                log.warning("Dropping worker stdout line")
+            # Old clients send a None sentinel at the end that was needed
+            # because it allowed a separate task to handle these asynchronously
+            # now that we have a synchronous callback this is not useful.
+            if obj["data"] is not None:
+                await state.stdout_handler(obj["data"])
         elif action == "worker_stderr":
-            try:
-                state.stderr_queue.put_nowait(obj["data"])
-            except asyncio.QueueFull:
-                log.warning("Dropping worker stderr line")
+            if obj["data"] is not None:
+                await state.stderr_handler(obj["data"])
         elif action == "worker_closed":
             state.closed.set_result(None)
             state.recv_queue.put_nowait("")
@@ -397,8 +392,10 @@ class WorkerManagerProxy:
         await self._writer.drain()
 
     async def create_worker(
-            self, worker_id, rid, log_level
-    ) -> Tuple[AsyncIterator, AsyncIterator]:
+            self, worker_id, rid, log_level,
+            stdout_handler: OutputHandler,
+            stderr_handler: OutputHandler,
+    ):
         if not self.connected:
             # It's possible if we're busy that:
             # * receive scheduler.submit, which creates a ManagedWorkerTransport
@@ -413,7 +410,9 @@ class WorkerManagerProxy:
                 f"WorkerManager {self._id} closed cannot create worker "
                 f"{worker_id} (RID {rid})"
             )
-        state = self._workers[worker_id] = _ManagedWorkerState()
+        state = self._workers[worker_id] = _ManagedWorkerState(
+            stdout_handler, stderr_handler
+        )
         await self._send({
             "action": "create_worker",
             "worker_id": worker_id,
@@ -422,12 +421,7 @@ class WorkerManagerProxy:
         })
         await self._writer.drain()
         await state.created
-        log.info(f"Created worker {worker_id} on manager {self._id} (RID {rid})")
-
-        return (
-            iterate_queue(state.stdout_queue),
-            iterate_queue(state.stderr_queue),
-        )
+        log.debug(f"Created worker {worker_id} on manager {self._id} (RID {rid})")
 
     async def worker_msg(self, worker_id, msg: str):
         await self._send({
@@ -523,8 +517,14 @@ class ManagedWorkerTransport(WorkerTransport):
         self._proxy = proxy
         self._id = id
 
-    async def create(self, rid, log_level) -> Tuple[AsyncIterator, AsyncIterator]:
-        return await self._proxy.create_worker(self._id, rid, log_level)
+    async def create(
+            self, rid: str, log_level: int,
+            stdout_handler: OutputHandler,
+            stderr_handler: OutputHandler,
+    ):
+        return await self._proxy.create_worker(
+            self._id, rid, log_level, stdout_handler, stderr_handler,
+        )
 
     async def send(self, msg: str):
         return await self._proxy.worker_msg(self._id, msg)

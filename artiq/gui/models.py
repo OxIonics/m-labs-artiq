@@ -175,8 +175,6 @@ class DictSyncModel(QtCore.QAbstractTableModel):
                 # other entries other than the changed entry. Leave it where it
                 # is.
                 new_row = old_row
-            elif new_row > old_row:
-                new_row -= 1
 
             self.backing_store[k] = v
             if old_row == new_row:
@@ -187,6 +185,8 @@ class DictSyncModel(QtCore.QAbstractTableModel):
                 self.beginMoveRows(QtCore.QModelIndex(), old_row, old_row,
                                    QtCore.QModelIndex(), new_row)
                 del self.row_to_key[old_row]
+                if new_row > old_row:
+                    new_row -= 1
                 self.row_to_key.insert(new_row, k)
                 self.endMoveRows()
         else:

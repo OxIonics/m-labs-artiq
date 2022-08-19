@@ -15,7 +15,7 @@ impl From<SchedError> for Error<SchedError> {
 fn worker(io: &Io, stream: &mut TcpStream) -> Result<(), Error<SchedError>> {
     read_magic(stream)?;
     Write::write_all(stream, "e".as_bytes())?;
-    info!("new connection from {}", stream.remote_endpoint());
+    debug!("new connection from {}", stream.remote_endpoint());
 
     loop {
         match Request::read_from(stream)? {

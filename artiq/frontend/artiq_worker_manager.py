@@ -5,6 +5,8 @@ import logging
 import signal
 import sys
 
+from pythonjsonlogger.jsonlogger import JsonFormatter
+
 from artiq.consts import WORKER_MANAGER_PORT
 from artiq.master.worker_transport import PipeWorkerTransport
 from artiq.test_tools.thread_worker_transport import ThreadWorkerTransport
@@ -58,6 +60,23 @@ def main():
         help="Specify the directory containing the repository of experiments",
     )
     parser.add_argument(
+        "--json-logs",
+        default=False,
+        action="store_true",
+        help="Write logs as json rather than text",
+    )
+    parser.add_argument(
+        "--ephemeral",
+        default=False,
+        action="store_true",
+        help="If --ephemeral is set a short reconnect time is always chosen. "
+             "Normally we choose whether to pass a long reconnect time based on "
+             "whether a id is passed. If an id is passed we choose a long "
+             "reconnect time so that the id can be reused, and if it's not we "
+             "choose a short one so that the master clears up this worker "
+             "manager quickly. Set this if you don't store the id."
+    )
+    parser.add_argument(
         "description",
         help="The human readable description for the worker manager"
     )
@@ -67,10 +86,14 @@ def main():
     )
     args = parser.parse_args()
 
-    logging.basicConfig(
-        level=logging.WARNING - args.verbose * 10,
-        format="%(asctime)s %(levelname)s:%(name)s:%(message)s",
-    )
+    log_level = logging.WARNING - args.verbose * 10
+    fmt = "%(asctime)s %(levelname)s:%(name)s:%(message)s"
+    if args.json_logs:
+        handler = logging.StreamHandler()
+        handler.setFormatter(JsonFormatter(fmt))
+        logging.basicConfig(level=log_level, handlers=[handler])
+    else:
+        logging.basicConfig(level=log_level, format=fmt)
 
     # Treat SIGTERM the same as SIGINT
     signal.signal(signal.SIGTERM, raise_keyboard_interrupt)
@@ -80,7 +103,7 @@ def main():
     else:
         transport_factory = PipeWorkerTransport
 
-    if args.id is None:
+    if args.ephemeral or args.id is None:
         reconnect_timeout = timedelta(seconds=0)
     else:
         reconnect_timeout = timedelta(days=7)

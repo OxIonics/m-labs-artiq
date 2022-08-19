@@ -99,8 +99,36 @@ class ParentDeviceDB:
 
 
 class ParentDatasetDB:
-    get = make_parent_action("get_dataset")
-    update = make_parent_action("update_dataset")
+    def __init__(self):
+        self.cache = {}
+
+    _get = staticmethod(make_parent_action("get_dataset"))
+    _update = staticmethod(make_parent_action("update_dataset"))
+
+    def get(self, key):
+        try:
+            return self.cache[key]
+        except KeyError:
+            value = self._get(key)
+            self.cache[key] = value
+            return value
+
+    def update(self, mod):
+        if mod["path"]:
+            key = mod["path"][0]
+        elif mod["action"] in ["setitem", "delitem"]:
+            key = mod["key"]
+        elif mod["action"] == "pop":
+            key = mod["i"]
+        else:
+            raise ValueError("Invalid update for dictionary")
+
+        try:
+            del self.cache[key]
+        except KeyError:
+            pass
+
+        self._update(mod)
 
 
 class Watchdog:
@@ -121,6 +149,9 @@ set_watchdog_factory(Watchdog)
 
 
 class Scheduler:
+    def __init__(self, dataset_cache):
+        self.dataset_cache = dataset_cache
+
     def set_run_info(self, rid, pipeline_name, expid, priority):
         self.rid = rid
         self.pipeline_name = pipeline_name
@@ -132,6 +163,7 @@ class Scheduler:
 
     @host_only
     def pause(self):
+        self.dataset_cache.clear()
         cmd = self.pause_parent()
         if cmd == "request_termination":
             raise TerminationRequested
@@ -251,18 +283,20 @@ class ExamineDatasetMgr:
     # a pretty dumb cache. This speeds up examines and scan where lots of
     # experiments use the same datasets. Especially if we're in sandboxing mode
     # and there's a ropey network hop.
-    _cache = {}
+    # This duplicates the caching with in the ParentDatasetDB class, but this
+    # cache doesn't get cleared for each examine.
+    def __init__(self, ddb):
+        self.ddb = ddb
+        self._cache = {}
 
-    @staticmethod
-    def get(key, archive=False):
+    def get(self, key, archive=False):
         try:
-            return ExamineDatasetMgr._cache[key]
+            return self._cache[key]
         except KeyError:
-            val = ParentDatasetDB.get(key)
-            ExamineDatasetMgr._cache[key] = val
+            val = self.ddb.get(key)
+            self._cache[key] = val
             return val
 
-    @staticmethod
     def update(self, mod):
         pass
 
@@ -425,10 +459,15 @@ def main(argv=None):
             for block in _compressed_blocks(tmpf):
                 _store_results(start_time, filename, base64.b64encode(block))
 
-    device_mgr = DeviceManager(ParentDeviceDB,
-                               virtual_devices={"scheduler": Scheduler(),
-                                                "ccb": CCB()})
-    dataset_mgr = DatasetManager(ParentDatasetDB)
+    parent_dataset_db = ParentDatasetDB()
+    device_mgr = DeviceManager(
+        ParentDeviceDB,
+        virtual_devices={
+            "scheduler": Scheduler(parent_dataset_db.cache),
+            "ccb": CCB(),
+        },
+    )
+    dataset_mgr = DatasetManager(parent_dataset_db)
 
     if args.import_hook:
         import_cache.install_hook()
@@ -436,6 +475,7 @@ def main(argv=None):
     try:
         with ExitStack() as stack:
             while True:
+                parent_dataset_db.cache.clear()
                 obj = get_object()
 
                 if first:
@@ -524,7 +564,11 @@ def main(argv=None):
                     ):
                         # No logging for examine it's not part of the main worker life
                         # cycle and I think it would get a bit chatty
-                        examine(ExamineDeviceMgr, ExamineDatasetMgr, obj["file"])
+                        examine(
+                            ExamineDeviceMgr,
+                            ExamineDatasetMgr(parent_dataset_db),
+                            obj["file"],
+                        )
                         put_completed()
                 elif action == "terminate":
                     break

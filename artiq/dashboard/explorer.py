@@ -434,6 +434,9 @@ class ExplorerDock(QtWidgets.QDockWidget):
         self.status_model = AllStatusUpdater({})
         explist_status_sub.add_setmodel_callback(self.set_status_model)
 
+    def get_active_worker_description(self):
+        return self.worker_managers_model.backing_store[self.active_worker_manager_id]["description"]
+
     def open_local_file(self):
         fn = QFileDialog.getOpenFileName(
             self,
@@ -459,6 +462,7 @@ class ExplorerDock(QtWidgets.QDockWidget):
 
     def set_repo_model(self, model: WorkerManagerModel):
         model.local_worker_manager = self.local_worker_manager
+        self.worker_managers_model = model
         old_active_worker_manager_id = self.active_worker_manager_id
         self.repo_select.setModel(model)
         if self.repo_select.currentData()["id"] != old_active_worker_manager_id:

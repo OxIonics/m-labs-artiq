@@ -54,7 +54,7 @@ pyqt5 = { version = "^5.15", optional = true }
 migen = { version = "^0.9.2", optional = true }
 misoc = { version = "^0.12.186", optional = true }
 jsonschema = "^4.2.1"
-sipyco = "^1.2"
+sipyco = "^1.4"
 llvmlite = { version = "^0.38.0", optional = true }
 pyqt5-qt5 = { version = "^5.15.2", optional = true }
 pyqt5-sip = { version = "^12.9.0", optional = true }
@@ -64,6 +64,7 @@ sphinx-rtd-theme = {version = "^1.0.0", optional = true}
 sphinx-argparse = {version = "^0.3.1", optional = true}
 sphinxcontrib-wavedrom = {version = "^3.0.2", optional = true}
 opentelemetry-api = "^1.11.0"
+python-json-logger = "^2.0.2"
 
 [tool.poetry.dev-dependencies]
 pytest = "^6.2.5"

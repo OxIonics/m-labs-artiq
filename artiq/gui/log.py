@@ -1,4 +1,5 @@
 import asyncio
+from contextlib import contextmanager
 import logging
 import time
 import re
@@ -27,7 +28,7 @@ class _Model(QtCore.QAbstractItemModel):
 
         self.entries = []
         self.pending_entries = []
-        self.depth = 1000
+        self.depth = 10_000
         timer = QtCore.QTimer(self)
         timer.timeout.connect(self.timer_tick)
         timer.start(100)
@@ -170,8 +171,65 @@ class _Model(QtCore.QAbstractItemModel):
                 "\n" + v[3][lineno])
 
 
+class _LogFilterProxyModel(QtCore.QSortFilterProxyModel):
+    def __init__(self, min_level: int, freetext: str, worker: str):
+        QtCore.QSortFilterProxyModel.__init__(self)
+        self.min_level = min_level
+        self.freetext = freetext
+        self.worker = worker
+
+    def filterAcceptsRow(self, sourceRow, sourceParent):
+        model: _Model = self.sourceModel()
+        if sourceParent.isValid():
+            parent_item = sourceParent.internalPointer()
+            msgnum = parent_item.row
+        else:
+            msgnum = sourceRow
+
+        if model.entries[msgnum][0] < self.min_level:
+            return False
+
+        if self.freetext:
+            data_source = model.entries[msgnum][1]
+            data_message = model.entries[msgnum][3]
+            accepted_freetext = self.freetext in data_source or any(self.freetext in m for m in data_message)
+            if not accepted_freetext:
+                return False
+
+        if self.worker:
+            source_worker = re.match(r"[^(]*\(([^),]*)[,)]", model.entries[msgnum][1])
+            accepted_worker = source_worker and source_worker.group(1) == self.worker
+            if not accepted_worker:
+                return False
+
+        return True
+
+    def full_entry(self, index):
+        if not index.isValid():
+            return []
+
+        source_index = self.mapToSource(index)
+        if not source_index.isValid():
+            return []
+
+        model: _Model = self.sourceModel()
+        return model.full_entry(source_index)
+
+
+
+class _LogView(QtWidgets.QTreeView):
+    copy = QtCore.pyqtSignal(name="copy")
+
+    def keyPressEvent(self, event: QtGui.QKeyEvent) -> None:
+        if event == QtGui.QKeySequence.Copy:
+            self.copy.emit()
+            return
+
+        return super().keyPressEvent(event)
+
+
 class LogDock(QDockWidgetCloseDetect):
-    def __init__(self, manager, name):
+    def __init__(self, manager, name, explorer=None):
         QDockWidgetCloseDetect.__init__(self, "Log")
         self.setObjectName(name)
 
@@ -182,10 +240,13 @@ class LogDock(QDockWidgetCloseDetect):
         self.filter_level = QtWidgets.QComboBox()
         self.filter_level.addItems(["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"])
         self.filter_level.setToolTip("Receive entries at or above this level")
+        self.filter_level.currentIndexChanged.connect(self.filter_level_changed)
+
         grid.addWidget(self.filter_level, 0, 1)
         self.filter_freetext = QtWidgets.QLineEdit()
         self.filter_freetext.setPlaceholderText("freetext filter...")
         self.filter_freetext.setToolTip("Receive entries containing this text")
+        self.filter_freetext.editingFinished.connect(self.filter_freetext_changed)
         grid.addWidget(self.filter_freetext, 0, 2)
 
         scrollbottom = QtWidgets.QToolButton()
@@ -198,8 +259,11 @@ class LogDock(QDockWidgetCloseDetect):
         clear = QtWidgets.QToolButton()
         clear.setIcon(QtWidgets.QApplication.style().standardIcon(
             QtWidgets.QStyle.SP_DialogResetButton))
+        clear.setToolTip("Clear logs")
         grid.addWidget(clear, 0, 4)
         clear.clicked.connect(lambda: self.model.clear())
+
+        columns = 5
 
         if manager:
             newdock = QtWidgets.QToolButton()
@@ -208,17 +272,35 @@ class LogDock(QDockWidgetCloseDetect):
                 QtWidgets.QStyle.SP_FileDialogNewFolder))
             # note the lambda, the default parameter is overriden otherwise
             newdock.clicked.connect(lambda: manager.create_new_dock())
-            grid.addWidget(newdock, 0, 5)
+            grid.addWidget(newdock, 0, columns)
+            columns += 1
+
+        self.explorer = explorer
+        if explorer:
+            self.filter_worker = QtWidgets.QComboBox()
+            self.filter_worker.addItems(["All workers", "Current repo workers"])
+            self.filter_worker.setToolTip(
+                "Filter the logs shown by which worker manager they originated from"
+            )
+            self.filter_worker.currentIndexChanged.connect(self.filter_worker_changed)
+            grid.addWidget(self.filter_worker, 0, columns)
+            columns += 1
+        else:
+            self.filter_worker = None
+
         grid.layout.setColumnStretch(2, 1)
 
-        self.log = QtWidgets.QTreeView()
+        self.log = _LogView()
         self.log.setHorizontalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel)
         self.log.setVerticalScrollMode(
             QtWidgets.QAbstractItemView.ScrollPerPixel)
         self.log.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAsNeeded)
-        grid.addWidget(self.log, 1, 0, colspan=6 if manager else 5)
+        self.log.setSelectionMode(QtWidgets.QAbstractItemView.ContiguousSelection)
+        self.log.copy.connect(self.copy_to_clipboard)
+        grid.addWidget(self.log, 1, 0, colspan=columns)
         self.scroll_at_bottom = False
+        self.suppress_scroll = False
         self.scroll_value = 0
 
         self.log.setContextMenuPolicy(QtCore.Qt.ActionsContextMenu)
@@ -240,27 +322,54 @@ class LogDock(QDockWidgetCloseDetect):
         self.log.header().resizeSection(0, 26*cw)
 
         self.model = _Model()
-        self.log.setModel(self.model)
-        self.model.rowsAboutToBeInserted.connect(self.rows_inserted_before)
-        self.model.rowsInserted.connect(self.rows_inserted_after)
-        self.model.rowsRemoved.connect(self.rows_removed)
+        self.filter_model = _LogFilterProxyModel(
+            getattr(logging, self.filter_level.currentText()),
+            self.filter_freetext.text(),
+            self.get_worker(),
+        )
+        self.filter_model.setSourceModel(self.model)
+        self.log.setModel(self.filter_model)
+        self.filter_model.rowsAboutToBeInserted.connect(self.rows_inserted_before)
+        self.filter_model.rowsInserted.connect(self.rows_inserted_after)
+        self.filter_model.rowsRemoved.connect(self.rows_removed)
+
+    @contextmanager
+    def with_filter_change(self):
+        """A context manager used when changing the filter.
+
+        This automatically invalidates the filter when the context is closed."""
+        # Filtering rows causes multiple insert/remove calls. We don't want to scroll
+        # for every one of them as it causes filtering to be much slower.
+        self.suppress_scroll = True
+
+        try:
+            yield self.filter_model
+            self.filter_model.invalidateFilter()
+        finally:
+            self.suppress_scroll = False
+
+        self.rows_removed()
+
+    def filter_freetext_changed(self):
+        with self.with_filter_change() as filter_model:
+            filter_model.freetext = self.filter_freetext.text()
+
+    def filter_level_changed(self):
+        with self.with_filter_change() as filter_model:
+            filter_model.min_level = getattr(logging, self.filter_level.currentText())
+
+    def filter_worker_changed(self):
+        with self.with_filter_change() as filter_model:
+            filter_model.worker = self.get_worker()
+
+    def get_worker(self):
+        if self.filter_worker and self.filter_worker.currentIndex() != 0:
+            return self.explorer.get_active_worker_description()
+
+        return ""
 
     def append_message(self, msg):
-        min_level = getattr(logging, self.filter_level.currentText())
-        freetext = self.filter_freetext.text()
-
-        accepted_level = msg[0] >= min_level
-
-        if freetext:
-            data_source = msg[1]
-            data_message = msg[3]
-            accepted_freetext = (freetext in data_source
-                or any(freetext in m for m in data_message))
-        else:
-            accepted_freetext = True
-
-        if accepted_level and accepted_freetext:
-            self.model.append(msg)
+        self.model.append(msg)
 
     def scroll_to_bottom(self):
         self.log.scrollToBottom()
@@ -271,7 +380,7 @@ class LogDock(QDockWidgetCloseDetect):
         self.scroll_at_bottom = self.scroll_value == scrollbar.maximum()
 
     def rows_inserted_after(self):
-        if self.scroll_at_bottom:
+        if self.scroll_at_bottom and not self.suppress_scroll:
             self.log.scrollToBottom()
 
     # HACK:
@@ -282,6 +391,9 @@ class LogDock(QDockWidgetCloseDetect):
     # before the removal.
     # TODO: check if this is still required after moving to QTreeView
     def rows_removed(self):
+        if self.suppress_scroll:
+            return
+
         if self.scroll_at_bottom:
             self.log.scrollToBottom()
         else:
@@ -289,10 +401,19 @@ class LogDock(QDockWidgetCloseDetect):
             scrollbar.setValue(self.scroll_value)
 
     def copy_to_clipboard(self):
-        idx = self.log.selectedIndexes()
-        if idx:
-            entry = "\n".join(self.model.full_entry(idx[0]))
-            QtWidgets.QApplication.clipboard().setText(entry)
+        idxs = self.log.selectedIndexes()
+
+        lines = []
+        seen_rows = set()
+        for idx in idxs:
+            if idx.row() in seen_rows:
+                continue
+
+            seen_rows.add(idx.row())
+            lines.extend(self.filter_model.full_entry(idx))
+
+        if lines:
+            QtWidgets.QApplication.clipboard().setText("\n".join(lines))
 
     def save_state(self):
         return {
@@ -325,8 +446,9 @@ class LogDock(QDockWidgetCloseDetect):
 
 
 class LogDockManager:
-    def __init__(self, main_window):
+    def __init__(self, main_window, explorer=None):
         self.main_window = main_window
+        self.explorer = explorer
         self.docks = dict()
 
     def append_message(self, msg):
@@ -340,7 +462,7 @@ class LogDockManager:
             n += 1
             name = "log" + str(n)
 
-        dock = LogDock(self, name)
+        dock = LogDock(self, name, self.explorer)
         self.docks[name] = dock
         if add_to_area:
             self.main_window.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)
@@ -370,7 +492,7 @@ class LogDockManager:
         if self.docks:
             raise NotImplementedError
         for name, dock_state in state.items():
-            dock = LogDock(self, name)
+            dock = LogDock(self, name, self.explorer)
             self.docks[name] = dock
             dock.restore_state(dock_state)
             self.main_window.addDockWidget(QtCore.Qt.RightDockWidgetArea, dock)

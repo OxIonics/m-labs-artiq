@@ -86,6 +86,7 @@ class ForwardHandler(logging.Handler):
                     f"ForwardLogger was cancelled during send {len(to_send)} "
                     f"messages discarded"
                 )
+                raise
             except Exception:
                 # traceback.print_exc()
                 raise

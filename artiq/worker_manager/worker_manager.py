@@ -8,7 +8,7 @@ import logging
 import os
 import socket
 import sys
-from typing import AsyncIterator, Awaitable, Dict, Callable, Iterator, List, Optional
+from typing import Awaitable, Dict, Callable, Iterator, List, Optional
 import uuid
 
 from sipyco import pyon
@@ -94,12 +94,56 @@ class BackgroundTasks:
 
 class _WorkerState:
 
-    def __init__(self, transport, msg_task, stdout_task, stderr_task):
+    def __init__(self, transport, msg_task):
         self.transport: WorkerTransport = transport
         self.msg_task = msg_task
-        self.stdout_task = stdout_task
-        self.stderr_task = stderr_task
         self.closing = False
+
+
+class MultiWriter:
+    """ A wrapper around StreamWriter which it's safe to call `drain` on
+    concurrently
+    """
+
+    def __init__(self, writer):
+        self._writer: asyncio.StreamWriter = writer
+        self._drain_waiter: Optional[asyncio.Task] = None
+
+    @property
+    def transport(self):
+        return self._writer.transport
+
+    def write(self, data):
+        return self._writer.write(data)
+
+    def write_eof(self):
+        return self._writer.write_eof()
+
+    def close(self):
+        return self._writer.close()
+
+    async def wait_closed(self):
+        return await self._writer.wait_closed()
+
+    async def _drain(self):
+        try:
+            await self._writer.drain()
+        finally:
+            self._drain_waiter = None
+
+    async def drain(self):
+        """Concurrent safe version of drain
+        """
+        # StreamWriter.drain hits an internal assertion if it's called more than
+        # once concurrently and actually has to suspend.
+        # This function wraps calls to drain and creates a future so that
+        # concurrent callers wait for the first caller to finish.
+        # We shield the actual drain call so that if the first caller is
+        # cancelled this doesn't cancel the drain call and therefore the second
+        # caller.
+        if self._drain_waiter is None:
+            self._drain_waiter = asyncio.shield(self._drain())
+        await self._drain_waiter
 
 
 class WorkerManager:
@@ -173,7 +217,7 @@ class WorkerManager:
         self._id = worker_manager_id
         self._description = description
         self._reader: asyncio.StreamReader = reader
-        self._writer: asyncio.StreamWriter = writer
+        self._writer = MultiWriter(writer)
         self._transport_factory: Callable[[], WorkerTransport] = transport_factory
         self._task: Optional[asyncio.Task] = None
         self._workers: Dict[str, _WorkerState] = {}
@@ -254,7 +298,7 @@ class WorkerManager:
                     log.warning("Connection to master lost")
                     break
                 tasks.add_background(self._handle_msg(line))
-        except asyncio.CancelledError:
+        except (GracefulExit, asyncio.CancelledError):
             log.info(f"Worker manager stopping")
             initiate_close = True
         except ConnectionError as ex:
@@ -298,10 +342,12 @@ class WorkerManager:
                 })
         elif action == "close_worker":
             worker_id = obj["worker_id"]
-            log.info(f"Closing worker {worker_id}")
+            log.debug(f"Closing worker {worker_id}")
             worker = self._workers[worker_id]
             worker.closing = True
-            await self._close_worker(worker, obj["term_timeout"], obj["rid"])
+            await self._close_worker(
+                worker_id, worker, obj["term_timeout"], obj["rid"],
+            )
             del self._workers[worker_id]
             await self._send({
                 "action": "worker_closed",
@@ -369,81 +415,83 @@ class WorkerManager:
                 "msg": "Worker exited unexpectedly"
             })
         else:
-            log.info(f"Worker {worker_id} exited")
+            log.debug(f"Worker {worker_id} exited")
 
-    async def _process_worker_output(
-            self,
-            worker_id: str,
-            forward_action: str,
-            output: AsyncIterator[str],
-    ):
+    def _make_log_forwarder(self, worker_id, forward_action):
         log_parser = LogParser(lambda: worker_id)
-        async for entry in output:
+
+        async def log_forwarder(data):
             try:
-                log_parser.line_input(entry)
+                log_parser.line_input(data)
             except:
                 log.info("exception in log forwarding", exc_info=True)
-                break
+
             await self._send({
                 "action": forward_action,
                 "worker_id": worker_id,
-                "data": entry,
+                "data": data,
             })
-        log.info(
-            "stopped log forwarding of stream %s of %s",
-            forward_action, worker_id
-        )
-        await self._send({
-            "action": forward_action,
-            "worker_id": worker_id,
-            "data": None,
-        })
+
+        return log_forwarder
 
     async def _create_worker(self, obj):
         worker_id = obj["worker_id"]
-        log.info(f"Creating worker {worker_id}")
+        log.debug(f"Creating worker {worker_id}")
         worker = self._transport_factory()
-        (stdout, stderr) = await worker.create(obj["rid"], obj["log_level"])
+        await worker.create(
+            obj["rid"], obj["log_level"],
+            self._make_log_forwarder(worker_id, "worker_stdout"),
+            self._make_log_forwarder(worker_id, "worker_stderr"),
+        )
 
         msg_task = asyncio.create_task(self._process_worker_msgs(worker_id, worker))
-        stdout_task = asyncio.create_task(self._process_worker_output(worker_id, "worker_stdout", stdout))
-        stderr_task = asyncio.create_task(self._process_worker_output(worker_id, "worker_stderr", stderr))
 
         self._workers[worker_id] = _WorkerState(
-            worker, msg_task, stdout_task, stderr_task
+            worker, msg_task,
         )
-        log.info(f"Created worker {worker_id}")
+        log.debug(f"Created worker {worker_id}")
         await self._send({
             "action": "worker_created",
             "worker_id": worker_id
         })
-        return [msg_task, stdout_task, stderr_task]
+        return [msg_task]
 
-    async def _close_worker(self, worker, term_timeout, rid):
+    async def _close_worker(self, worker_id, worker, term_timeout, rid):
         await worker.transport.close(term_timeout, rid)
         (_, pending) = await asyncio.wait(
-            [worker.msg_task, worker.stdout_task, worker.stderr_task],
+            [worker.msg_task],
             return_when=asyncio.ALL_COMPLETED,
             timeout=0.5,
         )
         if worker.msg_task in pending:
             log.warning("Msg task didn't exit")
-        if worker.stdout_task in pending:
-            log.warning("Stdout task didn't exit")
-        if worker.stderr_task in pending:
-            log.warning("Stderr task didn't exit")
+
+        # Backwards compatibility
+        # Send a sentinel at the end of the stdout and stderr streams
+        # this isn't needed by newer artiq masters but it by older ones
+        # newer artiq masters just ignore it.
+        await self._send({
+            "action": "worker_stdout",
+            "worker_id": worker_id,
+            "data": None
+        })
+        await self._send({
+            "action": "worker_stderr",
+            "worker_id": worker_id,
+            "data": None
+        })
 
     async def _clean_up(self, initiate_close):
         log.info("Closing worker manager")
         if self._log_forwarder:
             await self._log_forwarder.stop()
-        workers = list(self._workers.values())
+        workers = list(self._workers.items())
         self._workers.clear()
         if workers:
             log.info("Stopping workers")
             await asyncio.gather(*[
-                self._close_worker(worker, 1, "shutdown")
-                for worker in workers
+                self._close_worker(worker_id, worker, 1, "shutdown")
+                for worker_id, worker in workers
             ])
 
         try:
