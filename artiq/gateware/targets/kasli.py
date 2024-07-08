@@ -22,7 +22,7 @@ from artiq.gateware import rtio
 from artiq.gateware.rtio.phy import ttl_simple, ttl_serdes_7series, edge_counter
 from artiq.gateware.rtio.xilinx_clocking import fix_serdes_timing_path
 from artiq.gateware import rtio, eem, eem_7series
-from artiq.gateware.drtio.transceiver import gtp_7series, eem_serdes
+from artiq.gateware.drtio.transceiver import gtp_7series, eem_serdes, drp
 from artiq.gateware.drtio.siphaser import SiPhaser7Series
 from artiq.gateware.drtio.rx_synchronizer import XilinxRXSynchronizer
 from artiq.gateware.drtio import *
@@ -237,6 +237,10 @@ class MasterBase(MiniSoC, AMPSoC):
             sys_clk_freq=self.clk_freq,
             rtio_clk_freq=rtio_clk_freq)
         self.csr_devices.append("gt_drtio")
+
+        self.submodules.drp = drp.DRP([self.drtio_transceiver])
+        self.csr_devices.append("drp")
+        self.config["HAS_DRP"] = None
 
         if enable_sata:
             sfp_channels = self.gt_drtio.channels[1:]
@@ -479,6 +483,10 @@ class SatelliteBase(BaseSoC, AMPSoC):
             sys_clk_freq=self.clk_freq,
             rtio_clk_freq=rtio_clk_freq)
         self.csr_devices.append("gt_drtio")
+
+        self.submodules.drp = drp.DRP([self.drtio_transceiver])
+        self.csr_devices.append("drp")
+        self.config["HAS_DRP"] = None
 
         if enable_sata:
             sfp_channels = self.gt_drtio.channels[1:]

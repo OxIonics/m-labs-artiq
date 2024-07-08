@@ -30,6 +30,17 @@ class GTPSingle(Module):
         self.txoutclk = Signal()
         self.rxoutclk = Signal()
 
+        # External interface to connect to the DRP interface (when drp_enable is high)
+        self.drp_addr = Signal(9)
+        self.drp_en = Signal()
+        self.drp_di = Signal(16)
+        self.drp_rdy = Signal()
+        self.drp_do = Signal(16)
+        self.drp_we = Signal()
+
+        # When driven high, use connect to the DRP interface (vs the Init gateware)
+        self.drp_enable = Signal()
+
         # # #
 
         # TX generates RTIO clock, init must be in bootstrap domain
@@ -38,6 +49,11 @@ class GTPSingle(Module):
         # RX receives restart commands from SYS domain
         rx_init = GTPRXInit(rtio_clk_freq)
         self.submodules += rx_init
+
+        self.comb += [
+            rx_init.drpdo.eq(self.drp_do),
+            rx_init.drprdy.eq(self.drp_rdy)
+        ]
 
         self.comb += [
             tx_init.clk_path_ready.eq(self.clk_path_ready),
@@ -116,14 +132,14 @@ class GTPSingle(Module):
 
             # RX Margin Analysis Attributes
             p_ES_CONTROL                             =0b000000,
-            p_ES_ERRDET_EN                           ="FALSE",
-            p_ES_EYE_SCAN_EN                         ="FALSE",
+            p_ES_ERRDET_EN                           ="TRUE",
+            p_ES_EYE_SCAN_EN                         ="TRUE",
             p_ES_HORZ_OFFSET                         =0x010,
             p_ES_PMA_CFG                             =0b0000000000,
             p_ES_PRESCALE                            =0b00000,
             p_ES_QUALIFIER                           =0x00000000000000000000,
-            p_ES_QUAL_MASK                           =0x00000000000000000000,
-            p_ES_SDATA_MASK                          =0x00000000000000000000,
+            p_ES_QUAL_MASK                           =0xFFFFFFFFFFFFFFFFFFFF,
+            p_ES_SDATA_MASK                          =0xFFFFFFFFFF00000FFFFF,
             p_ES_VERT_OFFSET                         =0b000000000,
 
             # FPGA RX Interface Attributes
@@ -366,13 +382,13 @@ class GTPSingle(Module):
             i_TSTIN                          =0b11111111111111111111,
 
             # Channel - DRP Ports
-            i_DRPADDR=rx_init.drpaddr,
+            i_DRPADDR=Mux(self.drp_enable, self.drp_addr, rx_init.drpaddr),
             i_DRPCLK=ClockSignal("sys"),
-            i_DRPDI=rx_init.drpdi,
-            o_DRPDO=rx_init.drpdo,
-            i_DRPEN=rx_init.drpen,
-            o_DRPRDY=rx_init.drprdy,
-            i_DRPWE=rx_init.drpwe,
+            i_DRPDI=Mux(self.drp_enable, self.drp_di, rx_init.drpdi),
+            o_DRPDO=self.drp_do,
+            i_DRPEN=Mux(self.drp_enable, self.drp_en, rx_init.drpen),
+            o_DRPRDY=self.drp_rdy,
+            i_DRPWE=Mux(self.drp_enable, self.drp_we, rx_init.drpwe),
             # FPGA TX Interface Datapath Configuration
             i_TX8B10BEN                      =0,
             # Loopback Ports

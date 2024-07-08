@@ -39,3 +39,8 @@ pub mod drtio_eem;
 
 #[cfg(soc_platform = "efc")]
 pub mod ad9117;
+
+#[cfg(has_drp)]
+pub mod drp;
+#[cfg(has_drp)]
+pub mod eyescan;

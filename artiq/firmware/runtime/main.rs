@@ -33,7 +33,7 @@ use core::cell::RefCell;
 use core::convert::TryFrom;
 use smoltcp::wire::HardwareAddress;
 
-use board_misoc::{csr, ident, clock, spiflash, config, net_settings, pmp, boot};
+use board_misoc::{csr, ident, clock, spiflash, config, net_settings, pmp, boot, uart};
 #[cfg(has_ethmac)]
 use board_misoc::ethmac;
 #[cfg(soc_platform = "kasli")]
@@ -50,6 +50,8 @@ use board_artiq::si549;
 use board_artiq::drtio_eem;
 #[cfg(has_rtio_analyzer)]
 use proto_artiq::analyzer_proto;
+
+use board_artiq::eyescan;
 
 use riscv::register::{mcause, mepc, mtval};
 use smoltcp::iface::Routes;
@@ -236,6 +238,11 @@ fn startup() {
     #[cfg(has_grabber)]
     io.spawn(4096, grabber_thread);
 
+
+    info!("Starting eye scan init ...");
+    eyescan::init();
+
+
     let mut net_stats = ethmac::EthernetStatistics::new();
     loop {
         scheduler.run();
@@ -249,6 +256,25 @@ fn startup() {
         {
             io_expander0.service().expect("I2C I/O expander #0 service failed");
             io_expander1.service().expect("I2C I/O expander #1 service failed");
+        }
+
+        match uart::read() {
+            Ok(b'0') => {
+                info!("Scan ch 0");
+                eyescan::eye_scan(0, 4, 4, 0);
+            }
+            Ok(b'1') => {
+                info!("Scan ch 1");
+                eyescan::eye_scan(1, 4, 4, 0);
+            }
+            Ok(b'2') => {
+                info!("Scan ch 2");
+                eyescan::eye_scan(2, 4, 4, 0);
+            }
+            Ok(c) => {
+                info!("Unknown command - '{}'", c as char);
+            },
+            Err(_) => {}
         }
     }
 }

@@ -14,7 +14,7 @@ extern crate io;
 extern crate eh;
 
 use core::convert::TryFrom;
-use board_misoc::{csr, ident, clock, uart_logger, i2c, pmp};
+use board_misoc::{csr, ident, clock, uart_logger, i2c, pmp, uart};
 #[cfg(has_si5324)]
 use board_artiq::si5324;
 #[cfg(has_si549)]
@@ -31,6 +31,8 @@ use riscv::register::{mcause, mepc, mtval};
 use dma::Manager as DmaManager;
 use kernel::Manager as KernelManager;
 use analyzer::Analyzer;
+
+use board_artiq::eyescan;
 
 #[global_allocator]
 static mut ALLOC: alloc_list::ListAlloc = alloc_list::EMPTY;
@@ -757,6 +759,9 @@ pub extern fn main() -> i32 {
     #[cfg(has_drtio_eem)]
     drtio_eem::init();
 
+    info!("Starting eye scan init ...");
+    eyescan::init();
+
     #[cfg(has_drtio_routing)]
     let mut repeaters = [repeater::Repeater::default(); csr::DRTIOREP.len()];
     #[cfg(not(has_drtio_routing))]
@@ -859,6 +864,25 @@ pub extern fn main() -> i32 {
 
             if let Some(packet) = router.get_upstream_packet() {
                 drtioaux::send(0, &packet).unwrap();
+            }
+
+            match uart::read() {
+                Ok(b'0') => {
+                    info!("Scan ch 0");
+                    eyescan::eye_scan(0, 4, 4, 0);
+                }
+                Ok(b'1') => {
+                    info!("Scan ch 1");
+                    eyescan::eye_scan(1, 4, 4, 0);
+                }
+                Ok(b'2') => {
+                    info!("Scan ch 2");
+                    eyescan::eye_scan(2, 4, 4, 0);
+                }
+                Ok(c) => {
+                    info!("Unknown command - '{}'", c as char);
+                },
+                Err(_) => {}
             }
         }
 
