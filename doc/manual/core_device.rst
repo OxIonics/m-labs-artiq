@@ -39,7 +39,7 @@ The core device reserves some storage space (either flash or directly on SD card
 ``device_map``
   If set, allows the core log to connect RTIO channels to device names and use device names as well as channel numbers in log output. A correctly formatted table can be automatically generated with :mod:`~artiq.frontend.artiq_rtiomap`, see :ref:`Utilities<rtiomap-tool>`.
 ``net_trace``
-  If set to ``1``, will activate net trace (print all packets sent and received to UART and core log). This will considerably slow down all network response from the core. Not applicable for ARTIQ-Zynq (Kasli-SoC, ZC706).
+  If set to ``1``, will activate net trace (print all packets sent and received to UART and core log). This will considerably slow down all network response from the core. Not applicable for ARTIQ-Zynq (see :ref:`Zynq devices <devices-table>`).
 ``panic_reset``
   If set to ``1``, core device will restart automatically.  Not applicable for ARTIQ-Zynq.
 ``no_flash_boot``
@@ -106,6 +106,27 @@ If not using WRPLL, PLL can also be bypassed entirely with the options
 
 Bypassing the PLL ensures the skews between input clock, downstream clock outputs, and RTIO clock are deterministic across reboots of the system. This is useful when phase determinism is required in situations where the reference clock fans out to other devices before reaching the master.
 
+.. _types-of-boards:
+
+Types of boards
+---------------
+
+To clarify the terminology used in ARTIQ, we can distinguish the boards into a few key groups. There are two primary ways to categorize them. The first is based on the ARTIQ platform itself: either ARTIQ or ARTIQ-Zynq. ARTIQ-Zynq boards specifically refer to those that feature a Xilinx Zynq FPGA. The second distinction is based on how the boards are configured: some use a :ref:`JSON system description file <system-description>`, while others do not.
+
+Below are the current groups of boards:
+
+.. _devices-table:
+
++------------------------------+------------------------------+
+| **Device Type**              | **Devices**                  |
++==============================+==============================+
+| Zynq devices                 | Kasli-SoC, ZC706, EBAZ4205   |
++------------------------------+------------------------------+
+| JSON variant devices         | Kasli, Kasli-SoC             |
++------------------------------+------------------------------+
+| Hardcoded variant devices    | KC705, ZC706, EBAZ4205       |
++------------------------------+------------------------------+
+
 Board details
 -------------
 
@@ -135,15 +156,39 @@ Common KC705 problems
 * When connected, the CLOCK adapter breaks the JTAG chain due to TDI not being connected to TDO on the FMC mezzanine.
 * On some boards, the JTAG USB connector is not correctly soldered.
 
+VADJ
+""""
+
+With the NIST CLOCK and QC2 adapters, for safe operation of the DDS buses (to prevent damage to the IO banks of the FPGA), the FMC VADJ rail of the KC705 should be changed to 3.3V. Plug the Texas Instruments USB-TO-GPIO PMBus adapter into the PMBus connector in the corner of the KC705 and use the Fusion Digital Power Designer software to configure (requires Windows). Write to chip number U55 (address 52), channel 4, which is the VADJ rail, to make it 3.3V instead of 2.5V.  Power cycle the KC705 board to check that the startup voltage on the VADJ rail is now 3.3V.
+
 EBAZ4205
 ^^^^^^^^
 
 The `EBAZ4205 <https://github.com/xjtuecho/EBAZ4205>`_ Zynq-SoC control card, originally used in the Ebit E9+ BTC miner, is a low-cost development board (around $20-$30 USD), making it an ideal option for experimenting with ARTIQ. To use the EBAZ4205, it's important to carefully follow the board documentation to configure it to boot from the SD card, as network booting via ``artiq_netboot`` is currently unsupported. This is because the Ethernet PHY is routed through the EMIO, requiring the FPGA to be programmed before the board can establish a network connection.
 
-VADJ
-""""
+One useful application of the EBAZ4205 is controlling external devices like the AD9834 DDS Module from ZonRi Technology Co., Ltd. To establish communication between the EBAZ4205 and the AD9834 module, proper configuration of the SPI interface pins is essential. The board's flexibility allows for straightforward control of the DDS once the correct pinout is known. The table below details the necessary connections between the EBAZ4205 and the AD9834 module, including power, ground, and SPI signals.
 
-With the NIST CLOCK and QC2 adapters, for safe operation of the DDS buses (to prevent damage to the IO banks of the FPGA), the FMC VADJ rail of the KC705 should be changed to 3.3V. Plug the Texas Instruments USB-TO-GPIO PMBus adapter into the PMBus connector in the corner of the KC705 and use the Fusion Digital Power Designer software to configure (requires Windows). Write to chip number U55 (address 52), channel 4, which is the VADJ rail, to make it 3.3V instead of 2.5V.  Power cycle the KC705 board to check that the startup voltage on the VADJ rail is now 3.3V.
++--------------------------+---------------------+----------------------------+
+| Pin on AD9834 Module     | Chip Function       | Connection on EBAZ4205     |
++==========================+=====================+============================+
+| SCLK                     | SCLK                | CLK: DATA3-19 (Pin V20)    |
++--------------------------+---------------------+----------------------------+
+| DATA                     | SDATA               | MOSI: DATA3-17 (Pin U20)   |
++--------------------------+---------------------+----------------------------+
+| SYNC                     | FSYNC               | CS_N: DATA3-15 (Pin P19)   |
++--------------------------+---------------------+----------------------------+
+| FSE (Tied to GND)        | FSELECT             | N/A: Bit Controlled        |
++--------------------------+---------------------+----------------------------+
+| PSE (Tied to GND)        | PSELECT             | N/A: Bit Controlled        |
++--------------------------+---------------------+----------------------------+
+| GND                      | Ground              | GND: J8-1, J8-3            |
++--------------------------+---------------------+----------------------------+
+| VIN                      | AVDD/DVDD           | 3.3V: J8-2                 |
++--------------------------+---------------------+----------------------------+
+| RESET (Unused)           | RESET               | N/A: Bit Controlled        |
++--------------------------+---------------------+----------------------------+
+
+For a step-by-step guide, see the `EBAZ4205 and AD9834 setup guide <https://newell.github.io/projects/ebaz4205>`_.
 
 Variant details
 ---------------
